@@ -9,3 +9,5 @@ uploads/
 *.egg-info/
 prato*.jpg
 fotos/
+*.pt
+pesos/

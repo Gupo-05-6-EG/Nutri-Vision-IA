@@ -18,7 +18,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from . import service
+from . import imagem, service, vision
 from .config import settings
 from .db import create_all, get_db
 from .schemas import (
@@ -36,6 +36,10 @@ from .worker import processar_analise
 async def lifespan(app: FastAPI):
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     create_all()
+    # Carrega o modelo uma vez so e paga o custo de inicializacao aqui, nao na 1a analise.
+    detector = vision.carregar_detector(settings)
+    detector.aquecer()
+    app.state.detector = detector
     yield
 
 
@@ -59,6 +63,11 @@ async def _conflito(request: Request, exc: service.ConflictError) -> JSONRespons
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
+@app.exception_handler(imagem.ImagemInvalidaError)
+async def _imagem_invalida(request: Request, exc: imagem.ImagemInvalidaError) -> JSONResponse:
+    return JSONResponse(status_code=415, content={"detail": str(exc)})
+
+
 def _salvar_imagem(file: UploadFile) -> Path:
     if not (file.content_type or "").startswith("image/"):
         raise HTTPException(
@@ -75,10 +84,10 @@ def _salvar_imagem(file: UploadFile) -> Path:
             detail=f"imagem acima de {settings.max_upload_bytes} bytes",
         )
 
-    sufixo = Path(file.filename or "").suffix.lower() or ".jpg"
+    comprimida = imagem.comprimir(conteudo)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
-    destino = settings.upload_dir / f"{uuid.uuid4()}{sufixo}"
-    destino.write_bytes(conteudo)
+    destino = settings.upload_dir / f"{uuid.uuid4()}.jpg"
+    destino.write_bytes(comprimida)
     return destino
 
 
@@ -89,6 +98,7 @@ def _salvar_imagem(file: UploadFile) -> Path:
     summary="Envia a foto do prato para a fila de analise",
 )
 def criar_analise(
+    request: Request,
     background: BackgroundTasks,
     file: UploadFile = File(...),
     patient_id: Optional[str] = Form(default=None),
@@ -99,7 +109,7 @@ def criar_analise(
     analysis = service.create_analysis(
         db, image_path=str(caminho), patient_id=patient_id, meal_type=meal_type
     )
-    background.add_task(processar_analise, analysis.id)
+    background.add_task(processar_analise, analysis.id, request.app.state.detector)
     return AnalysisCreatedOut(id=analysis.id, status=analysis.status)
 
 
@@ -173,5 +183,5 @@ app.include_router(router)
 
 
 @app.get("/health", tags=["infra"])
-def health() -> dict:
-    return {"status": "ok"}
+def health(request: Request) -> dict:
+    return {"status": "ok", "model_version": request.app.state.detector.model_version}
