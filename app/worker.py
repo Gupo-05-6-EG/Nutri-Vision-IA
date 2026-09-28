@@ -1,11 +1,12 @@
 import time
 
-from . import service, vision
+from . import service
 from .db import SessionLocal
 from .schemas import DetectionIn
+from .vision import Detector
 
 
-def processar_analise(analysis_id: str) -> None:
+def processar_analise(analysis_id: str, detector: Detector) -> None:
     inicio = time.perf_counter()
 
     with SessionLocal() as db:
@@ -15,7 +16,7 @@ def processar_analise(analysis_id: str) -> None:
             return
 
         try:
-            resultado = vision.detectar(analysis.image_path)
+            resultado = detector.detectar(analysis.image_path)
             deteccoes = [
                 DetectionIn(food=d.food, grams=d.grams, confidence=d.confidence, bbox=d.bbox)
                 for d in resultado.detections

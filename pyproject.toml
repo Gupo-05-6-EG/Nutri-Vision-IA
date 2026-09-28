@@ -14,10 +14,21 @@ dependencies = [
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
     "python-multipart>=0.0.9",
+    "pillow>=10.0",
+    # Fotos HEIC do iPhone. O ultralytics tambem pede esse pacote ao abrir imagem.
+    "pi-heif>=0.18",
     # O SQLAlchemy puxa greenlet; a partir da 3.2 nao ha mais wheel para cp39,
     # e sem wheel o pip tenta compilar (exige MSVC). Fixa a ultima que tem.
     "greenlet<3.2; python_version < '3.10'",
 ]
 
+[project.optional-dependencies]
+# Puxa o torch (pesado). Sem ele o app sobe com o detector stub.
+vision = ["ultralytics>=8.1"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
 [tool.setuptools]
 packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
