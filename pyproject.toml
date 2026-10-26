@@ -15,7 +15,7 @@ dependencies = [
     "pydantic-settings>=2.2",
     "python-multipart>=0.0.9",
     "pillow>=10",
-    "google-genai>=1.0",
+    "google-genai>=1.47",
     "redis>=5",
     "rq>=2.0",
     "greenlet<3.2; python_version < '3.10'",

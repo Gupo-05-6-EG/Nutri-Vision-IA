@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from google.genai import errors
 
@@ -12,6 +13,13 @@ class _FakeClient:
         self.calls = []
         self.models = SimpleNamespace(generate_content=self._generate)
         self._text = json.dumps(response)
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.closed = True
 
     def _generate(self, **kwargs):
         self.calls.append(kwargs)
@@ -47,6 +55,7 @@ def test_maps_items_to_taco(gemini):
     ]
     prompt = fake.calls[0]["contents"][1]
     assert "561|Feijão, carioca, cozido" in prompt
+    assert fake.closed
 
 
 def test_unknown_taco_id_keeps_gemini_name(gemini):
@@ -86,6 +95,8 @@ def test_not_food_returns_empty(gemini):
         (errors.APIError(503, {"error": {"status": "UNAVAILABLE"}}), True),
         (errors.APIError(400, {"error": {"status": "INVALID_ARGUMENT"}}), False),
         (TimeoutError(), True),
+        (httpx.ReadTimeout("timed out"), True),
+        (httpx.ConnectError("refused"), True),
         (ValueError("broken json"), False),
     ],
 )

@@ -96,7 +96,8 @@ Variáveis de ambiente com prefixo `NUTRIVISION_` (ou no arquivo `.env`):
 | variável | padrão | descrição |
 |---|---|---|
 | `GEMINI_API_KEY` | - | chave da API do Gemini (obrigatória no worker) |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | modelo usado na análise |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | modelo usado na análise |
+| `GEMINI_TIMEOUT_MS` | `90000` | timeout de cada chamada ao Gemini (o retry fica com a fila) |
 | `REDIS_URL` | `redis://localhost:6379/0` | conexão com a fila |
 | `DATABASE_URL` | `sqlite:///nutrivision.db` | banco de dados (`/data/nutrivision.db` no Docker) |
 | `TACO_CSV` | `app/data/taco.csv` | arquivo da tabela TACO |
@@ -136,7 +137,7 @@ curl http://localhost:8000/api/v1/analyses/6f1c...
   "id": "6f1c...",
   "status": "DONE",
   "confirmed": false,
-  "model_version": "gemini-2.5-flash",
+  "model_version": "gemini-3.8-flash",
   "items": [
     {
       "id": "a91e...",

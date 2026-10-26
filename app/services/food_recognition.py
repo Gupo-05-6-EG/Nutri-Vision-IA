@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
+import httpx
 from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel
@@ -53,13 +54,19 @@ class RecognitionResult:
 def is_transient_error(exc: Exception) -> bool:
     if isinstance(exc, errors.APIError):
         return exc.code == 429 or exc.code >= 500
-    return isinstance(exc, (TimeoutError, ConnectionError))
+    return isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
 
 
 def _client() -> genai.Client:
     if not settings.gemini_api_key:
         raise RuntimeError("NUTRIVISION_GEMINI_API_KEY is not set")
-    return genai.Client(api_key=settings.gemini_api_key)
+    return genai.Client(
+        api_key=settings.gemini_api_key,
+        http_options=types.HttpOptions(
+            timeout=settings.gemini_timeout_ms,
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ),
+    )
 
 
 def _to_detections(response: _GeminiResponse) -> list:
@@ -80,18 +87,19 @@ def _to_detections(response: _GeminiResponse) -> list:
 
 
 def recognize_foods(image: bytes, mime_type: str) -> RecognitionResult:
-    response = _client().models.generate_content(
-        model=settings.gemini_model,
-        contents=[
-            types.Part.from_bytes(data=image, mime_type=mime_type),
-            _PROMPT.format(table=taco_table.format_for_prompt()),
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=_GeminiResponse,
-            temperature=0.2,
-        ),
-    )
+    with _client() as client:
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents=[
+                types.Part.from_bytes(data=image, mime_type=mime_type),
+                _PROMPT.format(table=taco_table.format_for_prompt()),
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=_GeminiResponse,
+                temperature=0.2,
+            ),
+        )
     return RecognitionResult(
         model_version=settings.gemini_model,
         detections=_to_detections(_GeminiResponse.model_validate_json(response.text)),
