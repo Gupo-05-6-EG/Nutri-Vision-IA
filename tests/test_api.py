@@ -1,52 +1,131 @@
-from pathlib import Path
+from io import BytesIO
 
+import fakeredis
+import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
+from rq import Queue
 
-from app.config import settings
-from app.db import SessionLocal
-from app.models import Analysis
-from app.vision import STUB_MODEL_VERSION
-
-from .conftest import gerar_imagem
+from app.main import app
+from app.services import analysis_service
+from app.services.food_recognition import Detection, RecognitionResult
+from app.worker import job_queue, tasks
 
 
-def test_upload_comprime_e_processa_com_detector_carregado(client):
-    original = gerar_imagem((3000, 2000))
-
-    resp = client.post(
-        "/api/v1/analises",
-        files={"file": ("prato.png", original, "image/png")},
-        data={"meal_type": "almoco"},
+@pytest.fixture
+def fake_redis(monkeypatch):
+    connection = fakeredis.FakeStrictRedis()
+    monkeypatch.setattr(job_queue, "get_redis", lambda: connection)
+    monkeypatch.setattr(
+        job_queue,
+        "get_queue",
+        lambda: Queue(job_queue.QUEUE_NAME, connection=connection, is_async=False),
     )
-    assert resp.status_code == 202
-    analysis_id = resp.json()["id"]
-
-    # O TestClient roda as background tasks antes de devolver a resposta.
-    corpo = client.get(f"/api/v1/analises/{analysis_id}").json()
-    assert corpo["status"] == "DONE"
-    assert corpo["model_version"] == STUB_MODEL_VERSION
-    assert len(corpo["itens"]) == 3
-
-    with SessionLocal() as db:
-        caminho = Path(db.get(Analysis, analysis_id).image_path)
-    assert caminho.suffix == ".jpg"
-    assert caminho.parent == settings.upload_dir
-    assert caminho.stat().st_size < len(original)
-    with Image.open(caminho) as salvo:
-        assert salvo.format == "JPEG"
-        assert max(salvo.size) == settings.image_max_side
+    return connection
 
 
-def test_upload_de_arquivo_que_nao_e_imagem(client):
-    resp = client.post(
-        "/api/v1/analises",
-        files={"file": ("prato.jpg", b"isto nao e uma foto", "image/jpeg")},
-    )
+@pytest.fixture
+def gemini_calls(monkeypatch):
+    calls = []
 
-    assert resp.status_code == 415
+    def _recognize(image, mime):
+        calls.append((image, mime))
+        return RecognitionResult(
+            "gemini-test",
+            [
+                Detection("Arroz, tipo 1, cozido", 3, 150.0, 0.9),
+                Detection("Frango, filé, grelhado", 409, 120.0, 0.85),
+            ],
+        )
+
+    monkeypatch.setattr(tasks.food_recognition, "recognize_foods", _recognize)
+    return calls
 
 
-def test_health_informa_o_modelo_carregado(client):
-    resp = client.get("/health")
+@pytest.fixture
+def client(fake_redis, gemini_calls):
+    with TestClient(app) as c:
+        yield c
 
-    assert resp.json() == {"status": "ok", "model_version": STUB_MODEL_VERSION}
+
+def _upload(client, photo, mime="image/png"):
+    return client.post("/api/v1/analyses", files={"file": ("meal.png", photo, mime)})
+
+
+def test_full_flow_with_correction_by_taco_id(client, db, sharp_photo):
+    created = _upload(client, sharp_photo)
+    assert created.status_code == 202, created.text
+    analysis_id = created.json()["id"]
+
+    analysis = client.get(f"/api/v1/analyses/{analysis_id}").json()
+    assert analysis["status"] == "DONE"
+    rice, chicken = analysis["items"]
+    assert rice["ai"]["taco_id"] == 3
+
+    corrected = client.patch(
+        f"/api/v1/analyses/{analysis_id}/items/{rice['id']}",
+        json={"taco_id": 561, "grams": 100, "actor": "patient"},
+    ).json()
+    assert corrected["confirmed"] == {"food": "Feijão, carioca, cozido", "taco_id": 561, "grams": 100.0}
+    assert corrected["ai"] == {"food": "Arroz, tipo 1, cozido", "taco_id": 3, "grams": 150.0, "confidence": 0.9}
+    assert corrected["edited_fields"] == ["food", "grams"]
+    assert {e.field for e in analysis_service.list_item_edits(db, rice["id"])} == {"food", "grams"}
+
+    confirmed = client.post(f"/api/v1/analyses/{analysis_id}/confirm", json={}).json()
+    assert confirmed["confirmed"] is True
+
+
+def test_unknown_taco_id_returns_422(client, sharp_photo):
+    analysis_id = _upload(client, sharp_photo).json()["id"]
+    item_id = client.get(f"/api/v1/analyses/{analysis_id}").json()["items"][0]["id"]
+
+    response = client.patch(f"/api/v1/analyses/{analysis_id}/items/{item_id}", json={"taco_id": 9999})
+
+    assert response.status_code == 422
+
+
+def test_manual_item_from_taco(client, sharp_photo):
+    analysis_id = _upload(client, sharp_photo).json()["id"]
+
+    item = client.post(f"/api/v1/analyses/{analysis_id}/items", json={"taco_id": 10, "grams": 80}).json()
+
+    assert item["confirmed"] == {"food": "Brócolis, cozido", "taco_id": 10, "grams": 80.0}
+    assert item["origin"] == "manual"
+
+
+def test_bad_photo_is_not_queued(client, fake_redis, blurry_photo):
+    response = _upload(client, blurry_photo).json()
+
+    assert (response["status"], response["reason"]) == ("NOT_ESTIMATED", "bad_photo")
+    assert response["quality"]["issues"] == ["blurry"]
+    assert Queue(job_queue.QUEUE_NAME, connection=fake_redis).count == 0
+
+
+def test_upload_is_compressed_before_queueing(client, gemini_calls, sharp_photo):
+    large = BytesIO()
+    Image.open(BytesIO(sharp_photo)).resize((3000, 2000)).save(large, "PNG")
+
+    assert _upload(client, large.getvalue()).status_code == 202
+
+    [(image, mime)] = gemini_calls
+    sent = Image.open(BytesIO(image))
+    assert (mime, sent.format, max(sent.size)) == ("image/jpeg", "JPEG", 1280)
+    assert len(image) < len(large.getvalue())
+
+
+def test_file_that_is_not_an_image(client):
+    assert _upload(client, b"not a photo", mime="image/jpeg").status_code == 415
+
+
+def test_non_image_content_type(client, sharp_photo):
+    assert _upload(client, sharp_photo, mime="application/pdf").status_code == 415
+
+
+def test_food_search(client):
+    response = client.get("/api/v1/foods", params={"search": "frango"})
+
+    assert response.json() == [{"id": 409, "name": "Frango, filé, grelhado", "category": "Carnes e derivados"}]
+
+
+def test_health_with_redis(client):
+    assert client.get("/health").json() == {"status": "ok", "redis": "ok"}

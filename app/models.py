@@ -17,14 +17,18 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .db import Base
+from app.core.database import Base
 
-ORIGIN_IA = "ia"
+ORIGIN_AI = "ai"
 ORIGIN_MANUAL = "manual"
 
 FIELD_FOOD = "food"
 FIELD_GRAMS = "grams"
 FIELD_REMOVED = "removed"
+
+REASON_BAD_PHOTO = "bad_photo"
+REASON_NOTHING_DETECTED = "nothing_detected"
+REASON_LOW_CONFIDENCE = "low_confidence"
 
 
 def _uuid() -> str:
@@ -41,6 +45,7 @@ class AnalysisStatus(str, enum.Enum):
     PROCESSING = "PROCESSING"
     DONE = "DONE"
     FAILED = "FAILED"
+    NOT_ESTIMATED = "NOT_ESTIMATED"
 
 
 class Analysis(Base):
@@ -49,7 +54,8 @@ class Analysis(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     patient_id: Mapped[Optional[str]] = mapped_column(String(36), index=True, default=None)
-    image_path: Mapped[str] = mapped_column(String(512))
+    image_mime: Mapped[str] = mapped_column(String(32))
+    image_sha256: Mapped[str] = mapped_column(String(64), index=True)
 
     status: Mapped[AnalysisStatus] = mapped_column(
         Enum(AnalysisStatus, native_enum=False, length=16),
@@ -57,6 +63,9 @@ class Analysis(Base):
         index=True,
     )
     error: Mapped[Optional[str]] = mapped_column(Text, default=None)
+
+    quality: Mapped[Optional[dict]] = mapped_column(JSON, default=None)
+    not_estimated_reason: Mapped[Optional[str]] = mapped_column(String(32), default=None)
 
     model_version: Mapped[Optional[str]] = mapped_column(String(64), default=None)
     inference_ms: Mapped[Optional[int]] = mapped_column(Integer, default=None)
@@ -91,14 +100,17 @@ class AnalysisItem(Base):
     )
 
     ai_food: Mapped[Optional[str]] = mapped_column(String(128), default=None)
+    ai_taco_id: Mapped[Optional[int]] = mapped_column(Integer, default=None)
     ai_grams: Mapped[Optional[float]] = mapped_column(Numeric(8, 2, asdecimal=False), default=None)
     ai_confidence: Mapped[Optional[float]] = mapped_column(Float, default=None)
-    ai_bbox: Mapped[Optional[dict]] = mapped_column(JSON, default=None)
 
     food: Mapped[str] = mapped_column(String(128))
+    taco_id: Mapped[Optional[int]] = mapped_column(Integer, default=None, index=True)
     grams: Mapped[float] = mapped_column(Numeric(8, 2, asdecimal=False))
 
-    origin: Mapped[str] = mapped_column(String(8), default=ORIGIN_IA, index=True)
+    low_confidence: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    origin: Mapped[str] = mapped_column(String(8), default=ORIGIN_AI, index=True)
     was_edited: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     edited_fields: Mapped[list] = mapped_column(JSON, default=list)
     removed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), default=None)

@@ -3,11 +3,9 @@ __pycache__/
 .venv/
 venv/
 *.db
-uploads/
+*.db-*
 .pytest_cache/
 .env
 *.egg-info/
 prato*.jpg
 fotos/
-*.pt
-pesos/

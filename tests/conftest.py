@@ -1,30 +1,48 @@
+import io
 import os
+import random
 import tempfile
-from io import BytesIO
 from pathlib import Path
 
 import pytest
 
-# O settings e instanciado no import do app: o ambiente precisa estar pronto antes.
-_TMP = Path(tempfile.mkdtemp(prefix="nutrivision-tests-"))
+_TMP = Path(tempfile.mkdtemp(prefix="nutrivision-test-"))
 os.environ["NUTRIVISION_DATABASE_URL"] = f"sqlite:///{(_TMP / 'test.db').as_posix()}"
-os.environ["NUTRIVISION_UPLOAD_DIR"] = str(_TMP / "uploads")
-os.environ.pop("NUTRIVISION_MODEL_PATH", None)
+os.environ["NUTRIVISION_TACO_CSV"] = str(Path(__file__).parent / "fixtures" / "taco_sample.csv")
+os.environ["NUTRIVISION_GEMINI_API_KEY"] = "test-key"
 
-from fastapi.testclient import TestClient  # noqa: E402
-from PIL import Image  # noqa: E402
+from PIL import Image
 
-from app.main import app  # noqa: E402
+from app.core.database import Base, SessionLocal, engine
+
+
+@pytest.fixture(autouse=True)
+def clean_database():
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    yield
 
 
 @pytest.fixture
-def client():
-    with TestClient(app) as c:
-        yield c
+def db():
+    with SessionLocal() as session:
+        yield session
 
 
-def gerar_imagem(tamanho=(800, 600), formato="PNG", modo="RGB", cor=(200, 120, 40), **save_kwargs) -> bytes:
-    img = Image.new(modo, tamanho, cor)
-    buf = BytesIO()
-    img.save(buf, formato, **save_kwargs)
-    return buf.getvalue()
+def _png(image: Image.Image) -> bytes:
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+@pytest.fixture
+def sharp_photo() -> bytes:
+    rnd = random.Random(42)
+    image = Image.new("L", (256, 256))
+    image.putdata([rnd.randint(60, 200) for _ in range(256 * 256)])
+    return _png(image.convert("RGB"))
+
+
+@pytest.fixture
+def blurry_photo() -> bytes:
+    return _png(Image.new("RGB", (256, 256), (128, 128, 128)))
