@@ -1,6 +1,9 @@
+from io import BytesIO
+
 import fakeredis
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 from rq import Queue
 
 from app.main import app
@@ -22,18 +25,25 @@ def fake_redis(monkeypatch):
 
 
 @pytest.fixture
-def client(fake_redis, monkeypatch):
-    monkeypatch.setattr(
-        tasks.food_recognition,
-        "recognize_foods",
-        lambda image, mime: RecognitionResult(
+def gemini_calls(monkeypatch):
+    calls = []
+
+    def _recognize(image, mime):
+        calls.append((image, mime))
+        return RecognitionResult(
             "gemini-test",
             [
                 Detection("Arroz, tipo 1, cozido", 3, 150.0, 0.9),
                 Detection("Frango, filé, grelhado", 409, 120.0, 0.85),
             ],
-        ),
-    )
+        )
+
+    monkeypatch.setattr(tasks.food_recognition, "recognize_foods", _recognize)
+    return calls
+
+
+@pytest.fixture
+def client(fake_redis, gemini_calls):
     with TestClient(app) as c:
         yield c
 
@@ -91,8 +101,24 @@ def test_bad_photo_is_not_queued(client, fake_redis, blurry_photo):
     assert Queue(job_queue.QUEUE_NAME, connection=fake_redis).count == 0
 
 
-def test_unsupported_format(client, sharp_photo):
-    assert _upload(client, sharp_photo, mime="image/gif").status_code == 415
+def test_upload_is_compressed_before_queueing(client, gemini_calls, sharp_photo):
+    large = BytesIO()
+    Image.open(BytesIO(sharp_photo)).resize((3000, 2000)).save(large, "PNG")
+
+    assert _upload(client, large.getvalue()).status_code == 202
+
+    [(image, mime)] = gemini_calls
+    sent = Image.open(BytesIO(image))
+    assert (mime, sent.format, max(sent.size)) == ("image/jpeg", "JPEG", 1280)
+    assert len(image) < len(large.getvalue())
+
+
+def test_file_that_is_not_an_image(client):
+    assert _upload(client, b"not a photo", mime="image/jpeg").status_code == 415
+
+
+def test_non_image_content_type(client, sharp_photo):
+    assert _upload(client, sharp_photo, mime="application/pdf").status_code == 415
 
 
 def test_food_search(client):

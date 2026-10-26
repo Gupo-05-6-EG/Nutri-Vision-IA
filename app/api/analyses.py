@@ -16,19 +16,17 @@ from app.schemas import (
     ManualItemIn,
     QualityOut,
 )
-from app.services import analysis_service, image_quality
+from app.services import analysis_service, image_compression, image_quality
 from app.worker import job_queue
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
 
-ACCEPTED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
-
 
 def _read_upload(file: UploadFile) -> bytes:
-    if file.content_type not in ACCEPTED_MIME_TYPES:
+    if not (file.content_type or "").startswith("image/"):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"send an image of type {', '.join(sorted(ACCEPTED_MIME_TYPES))}",
+            detail="send an image file",
         )
 
     content = file.file.read(settings.max_upload_bytes + 1)
@@ -54,19 +52,16 @@ def create_analysis(
     meal_type: Optional[str] = Form(default=None),
     db: Session = Depends(get_db),
 ) -> AnalysisCreatedOut:
-    image = _read_upload(file)
-
     try:
-        quality = image_quality.assess_image(image)
-    except image_quality.UnreadableImageError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"could not open the image: {exc}",
-        )
+        image = image_compression.compress_image(_read_upload(file))
+    except image_compression.InvalidImageError as exc:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc))
+
+    quality = image_quality.assess_image(image)
 
     analysis = analysis_service.create_analysis(
         db,
-        image_mime=file.content_type,
+        image_mime=image_compression.COMPRESSED_MIME_TYPE,
         image_sha256=hashlib.sha256(image).hexdigest(),
         patient_id=patient_id,
         meal_type=meal_type,
@@ -75,7 +70,7 @@ def create_analysis(
 
     if quality.ok:
         try:
-            job_queue.enqueue_analysis(analysis.id, image, file.content_type)
+            job_queue.enqueue_analysis(analysis.id, image, image_compression.COMPRESSED_MIME_TYPE)
         except RedisError as exc:
             analysis_service.mark_failed(db, analysis.id, f"queue unavailable: {exc}")
             raise HTTPException(

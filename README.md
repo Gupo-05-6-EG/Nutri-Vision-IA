@@ -9,6 +9,8 @@ O usuário pode corrigir qualquer item antes de confirmar a refeição. A estima
 - **Reconhecimento por foto**: o Google Gemini identifica cada alimento e estima os gramas.
 - **Mapeamento para a TACO**: cada item vem com o `taco_id` de um dos 597 alimentos da tabela,
   pronto para o cálculo de macronutrientes.
+- **Compressão da foto**: no upload a imagem é corrigida pela rotação da câmera, reduzida para
+  1280 px e convertida para JPEG sem metadados (GPS etc.). Aceita HEIC do iPhone.
 - **Checagem de qualidade**: fotos borradas, escuras ou estouradas são recusadas na hora, antes
   de gastar uma chamada à IA.
 - **Processamento em fila**: as análises rodam em background (Redis + RQ), com retry automático
@@ -32,8 +34,8 @@ O usuário pode corrigir qualquer item antes de confirmar a refeição. A estima
 ```
 
 1. O app envia a foto para `POST /api/v1/analyses`.
-2. A API mede nitidez e luminosidade. Se a foto estiver ruim, a análise já volta como
-   `NOT_ESTIMATED` com o motivo.
+2. A API comprime a foto e mede nitidez e luminosidade. Se a foto estiver ruim, a análise já
+   volta como `NOT_ESTIMATED` com o motivo.
 3. Se estiver boa, a análise é criada como `QUEUED` e a imagem vai para a fila no Redis.
    Ela não é gravada em disco; o banco guarda só o hash.
 4. O worker envia a foto e a lista da TACO ao Gemini, que responde um JSON com os alimentos,
@@ -101,7 +103,9 @@ Variáveis de ambiente com prefixo `NUTRIVISION_` (ou no arquivo `.env`):
 | `REDIS_URL` | `redis://localhost:6379/0` | conexão com a fila |
 | `DATABASE_URL` | `sqlite:///nutrivision.db` | banco de dados (`/data/nutrivision.db` no Docker) |
 | `TACO_CSV` | `app/data/taco.csv` | arquivo da tabela TACO |
-| `MAX_UPLOAD_BYTES` | `10485760` | tamanho máximo da foto (10 MB) |
+| `MAX_UPLOAD_BYTES` | `10485760` | tamanho máximo da foto enviada (10 MB) |
+| `IMAGE_MAX_SIDE` | `1280` | lado maior da foto depois da compressão |
+| `JPEG_QUALITY` | `85` | qualidade do JPEG comprimido |
 | `MIN_SHARPNESS` | `60.0` | nitidez mínima (variância do laplaciano) |
 | `MIN_BRIGHTNESS` | `45.0` | brilho médio mínimo |
 | `MAX_BRIGHTNESS` | `220.0` | brilho médio máximo |
@@ -120,7 +124,8 @@ Variáveis de ambiente com prefixo `NUTRIVISION_` (ou no arquivo `.env`):
 | `GET` | `/api/v1/foods?search=arroz` | busca alimentos na TACO |
 | `GET` | `/health` | status da API e do Redis |
 
-Formatos aceitos: JPEG, PNG e WebP.
+Formatos aceitos: qualquer imagem que o Pillow abra (JPEG, PNG, WebP, HEIC...). Arquivo que
+não é imagem retorna 415.
 
 ### Exemplo
 
@@ -198,6 +203,7 @@ app/
 ├── services/
 │   ├── analysis_service.py  # regras de negócio (criação, correção, confirmação)
 │   ├── food_recognition.py  # integração com o Gemini
+│   ├── image_compression.py # rotação, redimensionamento e conversão para JPEG
 │   ├── image_quality.py     # checagem de nitidez e luminosidade
 │   └── taco_table.py        # leitura e busca na tabela TACO
 ├── worker/

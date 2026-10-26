@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite:///{BASE_DIR / 'nutrivision.db'}"
     redis_url: str = "redis://localhost:6379/0"
     max_upload_bytes: int = 10 * 1024 * 1024
+    image_max_side: int = 1280
+    jpeg_quality: int = 85
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.8-flash"

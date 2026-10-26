@@ -15,6 +15,8 @@ dependencies = [
     "pydantic-settings>=2.2",
     "python-multipart>=0.0.9",
     "pillow>=10",
+    "pi-heif>=0.18; python_version >= '3.10'",
+    "pi-heif>=0.18,<0.23; python_version < '3.10'",
     "google-genai>=1.47",
     "redis>=5",
     "rq>=2.0",
@@ -29,3 +31,6 @@ include = ["app*"]
 
 [tool.setuptools.package-data]
 app = ["data/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
