@@ -1,23 +1,13 @@
-import hashlib
-from typing import Optional
+import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from redis.exceptions import RedisError
-from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import get_db
-from app.schemas import (
-    AnalysisCreatedOut,
-    AnalysisOut,
-    ConfirmIn,
-    ItemOut,
-    ItemPatchIn,
-    ManualItemIn,
-    QualityOut,
-)
-from app.services import analysis_service, image_compression, image_quality
-from app.worker import job_queue
+from app.schemas import AnalysisCreatedOut, AnalysisOut
+from app.services import image_compression, image_quality
+from app.services.analysis_result import REASON_BAD_PHOTO, AnalysisStatus
+from app.worker import job_queue, result_store
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
 
@@ -44,109 +34,48 @@ def _read_upload(file: UploadFile) -> bytes:
     "",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=AnalysisCreatedOut,
+    response_model_exclude_none=True,
     summary="Upload a meal photo to the analysis queue",
 )
-def create_analysis(
-    file: UploadFile = File(...),
-    patient_id: Optional[str] = Form(default=None),
-    meal_type: Optional[str] = Form(default=None),
-    db: Session = Depends(get_db),
-) -> AnalysisCreatedOut:
+def create_analysis(file: UploadFile = File(...)) -> AnalysisCreatedOut:
     try:
         image = image_compression.compress_image(_read_upload(file))
     except image_compression.InvalidImageError as exc:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc))
 
     quality = image_quality.assess_image(image)
+    analysis_id = str(uuid.uuid4())
 
-    analysis = analysis_service.create_analysis(
-        db,
-        image_mime=image_compression.COMPRESSED_MIME_TYPE,
-        image_sha256=hashlib.sha256(image).hexdigest(),
-        patient_id=patient_id,
-        meal_type=meal_type,
-        quality=quality,
-    )
+    if not quality.ok:
+        analysis = {
+            "id": analysis_id,
+            "status": AnalysisStatus.NOT_ESTIMATED.value,
+            "reason": REASON_BAD_PHOTO,
+            "issues": list(quality.issues),
+            "items": [],
+        }
+        result_store.save(analysis)
+        return AnalysisCreatedOut(**analysis)
 
-    if quality.ok:
-        try:
-            job_queue.enqueue_analysis(analysis.id, image, image_compression.COMPRESSED_MIME_TYPE)
-        except RedisError as exc:
-            analysis_service.mark_failed(db, analysis.id, f"queue unavailable: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="analysis queue unavailable, try again",
-            )
-
-    return AnalysisCreatedOut(
-        id=analysis.id,
-        status=analysis.status,
-        reason=analysis.not_estimated_reason,
-        quality=QualityOut(**quality.as_dict()),
-    )
+    result_store.save({"id": analysis_id, "status": AnalysisStatus.QUEUED.value})
+    try:
+        job_queue.enqueue_analysis(analysis_id, image, image_compression.COMPRESSED_MIME_TYPE)
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="analysis queue unavailable, try again",
+        )
+    return AnalysisCreatedOut(id=analysis_id, status=AnalysisStatus.QUEUED)
 
 
 @router.get(
     "/{analysis_id}",
     response_model=AnalysisOut,
-    summary="Analysis result: AI estimate side by side with the confirmed values",
+    response_model_exclude_none=True,
+    summary="Analysis result: foods identified in the photo",
 )
-def get_analysis(analysis_id: str, db: Session = Depends(get_db)) -> AnalysisOut:
-    return AnalysisOut.from_model(analysis_service.get_analysis(db, analysis_id))
-
-
-@router.patch(
-    "/{analysis_id}/items/{item_id}",
-    response_model=ItemOut,
-    summary="Correct the food and/or grams of an item",
-)
-def update_item(
-    analysis_id: str,
-    item_id: str,
-    patch: ItemPatchIn,
-    db: Session = Depends(get_db),
-) -> ItemOut:
-    return ItemOut.from_model(analysis_service.update_item(db, analysis_id, item_id, patch))
-
-
-@router.post(
-    "/{analysis_id}/items",
-    status_code=status.HTTP_201_CREATED,
-    response_model=ItemOut,
-    summary="Add a food the AI did not detect",
-)
-def add_item(
-    analysis_id: str,
-    data: ManualItemIn,
-    db: Session = Depends(get_db),
-) -> ItemOut:
-    return ItemOut.from_model(analysis_service.add_manual_item(db, analysis_id, data))
-
-
-@router.delete(
-    "/{analysis_id}/items/{item_id}",
-    response_model=ItemOut,
-    summary="Remove an item from the meal (soft delete, keeps the AI estimate)",
-)
-def remove_item(
-    analysis_id: str,
-    item_id: str,
-    actor: Optional[str] = None,
-    db: Session = Depends(get_db),
-) -> ItemOut:
-    return ItemOut.from_model(analysis_service.remove_item(db, analysis_id, item_id, actor))
-
-
-@router.post(
-    "/{analysis_id}/confirm",
-    response_model=AnalysisOut,
-    summary="Close the meal, accepting batch corrections",
-)
-def confirm_analysis(
-    analysis_id: str,
-    payload: Optional[ConfirmIn] = None,
-    db: Session = Depends(get_db),
-) -> AnalysisOut:
-    return AnalysisOut.from_model(
-        analysis_service.confirm_analysis(db, analysis_id, payload or ConfirmIn())
-    )
+def get_analysis(analysis_id: str) -> AnalysisOut:
+    analysis = result_store.get(analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="analysis not found")
+    return AnalysisOut(**analysis)

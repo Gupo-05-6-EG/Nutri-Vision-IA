@@ -3,14 +3,13 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_DIR = Path(__file__).resolve().parents[1]
-BASE_DIR = APP_DIR.parent
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NUTRIVISION_", env_file=".env", extra="ignore")
 
-    database_url: str = f"sqlite:///{BASE_DIR / 'nutrivision.db'}"
     redis_url: str = "redis://localhost:6379/0"
+    result_ttl_seconds: int = 24 * 3600
     max_upload_bytes: int = 10 * 1024 * 1024
     image_max_side: int = 1280
     jpeg_quality: int = 85
@@ -19,8 +18,6 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.8-flash"
     gemini_timeout_ms: int = 90_000
     taco_csv: Path = APP_DIR / "data" / "taco.csv"
-
-    grams_epsilon: float = 0.5
 
     min_sharpness: float = 60.0
     min_brightness: float = 45.0

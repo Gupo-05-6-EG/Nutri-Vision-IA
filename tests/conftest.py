@@ -1,32 +1,30 @@
 import io
 import os
 import random
-import tempfile
 from pathlib import Path
 
 import pytest
 
-_TMP = Path(tempfile.mkdtemp(prefix="nutrivision-test-"))
-os.environ["NUTRIVISION_DATABASE_URL"] = f"sqlite:///{(_TMP / 'test.db').as_posix()}"
 os.environ["NUTRIVISION_TACO_CSV"] = str(Path(__file__).parent / "fixtures" / "taco_sample.csv")
 os.environ["NUTRIVISION_GEMINI_API_KEY"] = "test-key"
 
+import fakeredis
 from PIL import Image
+from rq import Queue
 
-from app.core.database import Base, SessionLocal, engine
+from app.worker import job_queue
 
 
 @pytest.fixture(autouse=True)
-def clean_database():
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    yield
-
-
-@pytest.fixture
-def db():
-    with SessionLocal() as session:
-        yield session
+def fake_redis(monkeypatch):
+    connection = fakeredis.FakeStrictRedis()
+    monkeypatch.setattr(job_queue, "get_redis", lambda: connection)
+    monkeypatch.setattr(
+        job_queue,
+        "get_queue",
+        lambda: Queue(job_queue.QUEUE_NAME, connection=connection, is_async=False),
+    )
+    return connection
 
 
 def _png(image: Image.Image) -> bytes:
