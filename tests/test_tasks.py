@@ -3,16 +3,16 @@ from types import SimpleNamespace
 import pytest
 from google.genai import errors
 
-from app.models import REASON_NOTHING_DETECTED, AnalysisStatus
-from app.services import analysis_service
 from app.services.food_recognition import Detection, RecognitionResult
-from app.worker import tasks
+from app.worker import result_store, tasks
 
 RATE_LIMIT = errors.APIError(429, {"error": {"status": "RESOURCE_EXHAUSTED"}})
+ANALYSIS_ID = "a1"
 
 
-def _new_analysis(db) -> str:
-    return analysis_service.create_analysis(db, image_mime="image/png", image_sha256="0" * 64).id
+@pytest.fixture(autouse=True)
+def queued_analysis():
+    result_store.save({"id": ANALYSIS_ID, "status": "QUEUED"})
 
 
 def _gemini_returns(monkeypatch, *detections):
@@ -34,70 +34,76 @@ def _retries_left(monkeypatch, n):
     monkeypatch.setattr(tasks, "get_current_job", lambda: SimpleNamespace(retries_left=n))
 
 
-def _reload(db, analysis_id):
-    db.expire_all()
-    return analysis_service.get_analysis(db, analysis_id)
+def test_stores_the_recognized_foods(monkeypatch):
+    _gemini_returns(monkeypatch, Detection("Arroz, tipo 1, cozido", 3, 150.0, 0.9))
+
+    tasks.process_analysis(ANALYSIS_ID, b"img", "image/jpeg")
+
+    assert result_store.get(ANALYSIS_ID) == {
+        "id": ANALYSIS_ID,
+        "status": "DONE",
+        "reason": None,
+        "model_version": "gemini-test",
+        "items": [{"food": "Arroz, tipo 1, cozido", "taco_id": 3, "grams": 150.0, "confidence": 0.9}],
+    }
 
 
-def test_stores_items_with_taco_id(db, monkeypatch):
-    analysis_id = _new_analysis(db)
-    _gemini_returns(
-        monkeypatch,
-        Detection("Arroz, tipo 1, cozido", 3, 150.0, 0.9),
-        Detection("farofa", None, 40.0, 0.8),
-    )
-
-    tasks.process_analysis(analysis_id, b"img", "image/png")
-
-    analysis = _reload(db, analysis_id)
-    assert analysis.status is AnalysisStatus.DONE
-    assert analysis.model_version == "gemini-test"
-    rice, farofa = analysis.items
-    assert (rice.ai_taco_id, rice.taco_id, rice.ai_grams, rice.low_confidence) == (3, 3, 150.0, False)
-    assert (farofa.ai_taco_id, farofa.low_confidence) == (None, True)
-
-
-def test_no_food_is_not_estimated(db, monkeypatch):
-    analysis_id = _new_analysis(db)
+def test_no_food_is_not_estimated(monkeypatch):
     _gemini_returns(monkeypatch)
 
-    tasks.process_analysis(analysis_id, b"img", "image/png")
+    tasks.process_analysis(ANALYSIS_ID, b"img", "image/jpeg")
 
-    analysis = _reload(db, analysis_id)
-    assert (analysis.status, analysis.not_estimated_reason) == (
-        AnalysisStatus.NOT_ESTIMATED,
-        REASON_NOTHING_DETECTED,
-    )
+    analysis = result_store.get(ANALYSIS_ID)
+    assert (analysis["status"], analysis["reason"]) == ("NOT_ESTIMATED", "nothing_detected")
 
 
-def test_rate_limit_reraises_so_rq_retries(db, monkeypatch):
-    analysis_id = _new_analysis(db)
+def test_only_weak_guesses_is_low_confidence(monkeypatch):
+    _gemini_returns(monkeypatch, Detection("farofa", None, 40.0, 0.9), Detection("Arroz, tipo 1, cozido", 3, 80.0, 0.2))
+
+    tasks.process_analysis(ANALYSIS_ID, b"img", "image/jpeg")
+
+    analysis = result_store.get(ANALYSIS_ID)
+    assert (analysis["status"], analysis["reason"], len(analysis["items"])) == ("NOT_ESTIMATED", "low_confidence", 2)
+
+
+def test_rate_limit_reraises_so_rq_retries(monkeypatch):
     _gemini_raises(monkeypatch, RATE_LIMIT)
     _retries_left(monkeypatch, 2)
 
     with pytest.raises(errors.APIError):
-        tasks.process_analysis(analysis_id, b"img", "image/png")
+        tasks.process_analysis(ANALYSIS_ID, b"img", "image/jpeg")
 
-    assert _reload(db, analysis_id).status is AnalysisStatus.PROCESSING
+    assert result_store.get(ANALYSIS_ID)["status"] == "PROCESSING"
 
 
-def test_rate_limit_on_last_attempt_marks_failed(db, monkeypatch):
-    analysis_id = _new_analysis(db)
+def test_rate_limit_on_last_attempt_marks_failed(monkeypatch):
     _gemini_raises(monkeypatch, RATE_LIMIT)
     _retries_left(monkeypatch, 0)
 
-    tasks.process_analysis(analysis_id, b"img", "image/png")
+    tasks.process_analysis(ANALYSIS_ID, b"img", "image/jpeg")
 
-    analysis = _reload(db, analysis_id)
-    assert analysis.status is AnalysisStatus.FAILED
-    assert "429" in analysis.error
+    analysis = result_store.get(ANALYSIS_ID)
+    assert analysis["status"] == "FAILED"
+    assert "429" in analysis["error"]
 
 
-def test_permanent_error_fails_without_retry(db, monkeypatch):
-    analysis_id = _new_analysis(db)
+def test_permanent_error_fails_without_retry(monkeypatch):
     _gemini_raises(monkeypatch, ValueError("broken json"))
     _retries_left(monkeypatch, 3)
 
-    tasks.process_analysis(analysis_id, b"img", "image/png")
+    tasks.process_analysis(ANALYSIS_ID, b"img", "image/jpeg")
 
-    assert _reload(db, analysis_id).status is AnalysisStatus.FAILED
+    assert result_store.get(ANALYSIS_ID)["status"] == "FAILED"
+
+
+def test_job_crash_marks_failed_only_after_last_retry():
+    job = SimpleNamespace(id=ANALYSIS_ID, retries_left=1)
+
+    result_store.on_job_failure(job, None, ImportError, ImportError("No module named 'httpx'"), None)
+    assert result_store.get(ANALYSIS_ID)["status"] == "QUEUED"
+
+    job.retries_left = 0
+    result_store.on_job_failure(job, None, ImportError, ImportError("No module named 'httpx'"), None)
+    analysis = result_store.get(ANALYSIS_ID)
+    assert analysis["status"] == "FAILED"
+    assert "httpx" in analysis["error"]

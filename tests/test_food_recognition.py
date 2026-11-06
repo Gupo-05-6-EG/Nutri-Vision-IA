@@ -5,7 +5,7 @@ import httpx
 import pytest
 from google.genai import errors
 
-from app.services import food_recognition, taco_table
+from app.services import food_recognition
 
 
 class _FakeClient:
@@ -102,8 +102,3 @@ def test_not_food_returns_empty(gemini):
 )
 def test_is_transient_error(exc, transient):
     assert food_recognition.is_transient_error(exc) is transient
-
-
-def test_taco_search_ignores_accents_and_case():
-    assert [f.id for f in taco_table.search_foods("FEIJAO cozido")] == [561]
-    assert [f.id for f in taco_table.search_foods("brocolis")] == [10]

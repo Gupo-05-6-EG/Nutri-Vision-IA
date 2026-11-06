@@ -1,5 +1,4 @@
 import csv
-import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
@@ -16,11 +15,6 @@ class TacoFood:
     id: int
     name: str
     category: str = ""
-
-
-def _fold(text: str) -> str:
-    decomposed = unicodedata.normalize("NFKD", text.casefold())
-    return "".join(c for c in decomposed if not unicodedata.combining(c))
 
 
 @lru_cache(maxsize=1)
@@ -50,9 +44,3 @@ def get_food(taco_id: int) -> Optional[TacoFood]:
 
 def format_for_prompt() -> str:
     return "\n".join(f"{f.id}|{f.name}" for f in _load_table().values())
-
-
-def search_foods(text: str, limit: int = 20) -> list:
-    terms = _fold(text).split()
-    matches = [f for f in _load_table().values() if all(t in _fold(f.name) for t in terms)]
-    return matches[:limit]

@@ -11,12 +11,8 @@ COPY pyproject.toml README.md ./
 COPY app ./app
 RUN pip install .
 
-RUN useradd --create-home --uid 1000 nutri \
-    && mkdir -p /data \
-    && chown nutri:nutri /data
+RUN useradd --create-home --uid 1000 nutri
 USER nutri
-
-ENV NUTRIVISION_DATABASE_URL=sqlite:////data/nutrivision.db
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

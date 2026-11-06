@@ -1,12 +1,12 @@
 from functools import lru_cache
 
 from redis import Redis
-from rq import Queue, Retry
+from rq import Callback, Queue, Retry
 
 from app.core.config import settings
 
 QUEUE_NAME = "analyses"
-SEVEN_DAYS = 7 * 24 * 3600
+FAILED_JOB_TTL = 300
 
 
 @lru_cache(maxsize=1)
@@ -25,6 +25,7 @@ def enqueue_analysis(analysis_id: str, image: bytes, mime_type: str) -> None:
         job_id=analysis_id,
         timeout=120,
         result_ttl=0,
-        failure_ttl=SEVEN_DAYS,
+        failure_ttl=FAILED_JOB_TTL,
         retry=Retry(max=3, interval=[15, 60, 180]),
+        on_failure=Callback("app.worker.result_store.on_job_failure"),
     )
