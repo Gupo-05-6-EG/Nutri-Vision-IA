@@ -1,15 +1,88 @@
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Path, UploadFile, status
 from redis.exceptions import RedisError
 
 from app.core.config import settings
-from app.schemas import AnalysisCreatedOut, AnalysisOut
+from app.schemas import AnalysisCreatedOut, AnalysisOut, ErrorOut
 from app.services import image_compression, image_quality
 from app.services.analysis_result import REASON_BAD_PHOTO, AnalysisStatus
 from app.worker import job_queue, result_store
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
+
+ANALYSIS_ID = "8c839452-3b71-4c47-9e97-34f14ac7d5ea"
+
+
+def _json_examples(**examples) -> dict:
+    return {"application/json": {"examples": examples}}
+
+
+def _error(description: str, detail: str) -> dict:
+    return {"model": ErrorOut, "description": description, "content": {"application/json": {"example": {"detail": detail}}}}
+
+
+CREATE_RESPONSES = {
+    202: {
+        "description": "Foto aceita. Foto boa vai para a fila; foto ruim é respondida na hora.",
+        "content": _json_examples(
+            queued={
+                "summary": "Foto na fila para análise",
+                "value": {"id": ANALYSIS_ID, "status": "QUEUED"},
+            },
+            bad_photo={
+                "summary": "Foto borrada ou mal iluminada (o Gemini não é chamado)",
+                "value": {"id": ANALYSIS_ID, "status": "NOT_ESTIMATED", "reason": "bad_photo", "issues": ["blurry"]},
+            },
+        ),
+    },
+    413: _error("Foto maior que o limite de upload (10 MB por padrão).", "image larger than 10485760 bytes"),
+    415: _error("O arquivo não é uma imagem ou não pôde ser aberto.", "file is not a valid image"),
+    503: _error("Redis fora do ar. Tente novamente mais tarde.", "analysis queue unavailable, try again"),
+}
+
+GET_RESPONSES = {
+    200: {
+        "description": "Situação atual da análise. Consulte de novo enquanto o status for `QUEUED` ou `PROCESSING`.",
+        "content": _json_examples(
+            done={
+                "summary": "Alimentos identificados",
+                "value": {
+                    "id": ANALYSIS_ID,
+                    "status": "DONE",
+                    "model_version": "gemini-3.5-flash",
+                    "items": [
+                        {"food": "Arroz, tipo 1, cozido", "taco_id": 3, "grams": 160.0, "confidence": 0.95},
+                        {"food": "Feijão, preto, cozido", "taco_id": 567, "grams": 110.0, "confidence": 0.95},
+                        {"food": "farofa", "grams": 30.0, "confidence": 0.7},
+                    ],
+                },
+            },
+            processing={
+                "summary": "Ainda em análise",
+                "value": {"id": ANALYSIS_ID, "status": "PROCESSING"},
+            },
+            bad_photo={
+                "summary": "Foto ruim",
+                "value": {"id": ANALYSIS_ID, "status": "NOT_ESTIMATED", "reason": "bad_photo", "issues": ["blurry"], "items": []},
+            },
+            nothing_detected={
+                "summary": "Nenhum alimento na foto",
+                "value": {"id": ANALYSIS_ID, "status": "NOT_ESTIMATED", "reason": "nothing_detected", "model_version": "gemini-3.5-flash", "items": []},
+            },
+            failed={
+                "summary": "O Gemini falhou mesmo depois das novas tentativas",
+                "value": {
+                    "id": ANALYSIS_ID,
+                    "status": "FAILED",
+                    "error": "ServerError: 503 UNAVAILABLE. This model is currently experiencing high demand.",
+                },
+            },
+        ),
+    },
+    404: _error("Não existe análise com esse id, ou o resultado já expirou (24 h).", "analysis not found"),
+    503: _error("Redis fora do ar. Tente novamente mais tarde.", "storage unavailable, try again"),
+}
 
 
 def _read_upload(file: UploadFile) -> bytes:
@@ -35,9 +108,19 @@ def _read_upload(file: UploadFile) -> bytes:
     status_code=status.HTTP_202_ACCEPTED,
     response_model=AnalysisCreatedOut,
     response_model_exclude_none=True,
-    summary="Upload a meal photo to the analysis queue",
+    summary="Enviar a foto do prato",
+    description=(
+        "Envia a foto para análise e devolve na hora o `id` da análise.\n\n"
+        "A foto é comprimida (rotação do EXIF, até 1280 px, JPEG sem metadados) e passa por uma checagem "
+        "de nitidez e luminosidade. Foto ruim é respondida na hora como `NOT_ESTIMATED` e nem chega ao Gemini. "
+        "Foto boa vai para a fila: consulte `GET /api/v1/analyses/{id}` para pegar o resultado.\n\n"
+        "A foto não é guardada: ela existe só dentro do job da fila e é apagada quando a análise termina."
+    ),
+    responses=CREATE_RESPONSES,
 )
-def create_analysis(file: UploadFile = File(...)) -> AnalysisCreatedOut:
+def create_analysis(
+    file: UploadFile = File(description="Foto da refeição: JPEG, PNG, WebP, HEIC ou outro formato que o Pillow abra. Até 10 MB."),
+) -> AnalysisCreatedOut:
     try:
         image = image_compression.compress_image(_read_upload(file))
     except image_compression.InvalidImageError as exc:
@@ -72,9 +155,17 @@ def create_analysis(file: UploadFile = File(...)) -> AnalysisCreatedOut:
     "/{analysis_id}",
     response_model=AnalysisOut,
     response_model_exclude_none=True,
-    summary="Analysis result: foods identified in the photo",
+    summary="Consultar o resultado da análise",
+    description=(
+        "Devolve os alimentos identificados na foto, com o id da TACO e os gramas estimados.\n\n"
+        "Enquanto o status for `QUEUED` ou `PROCESSING`, consulte de novo em alguns segundos. "
+        "Campos sem valor não aparecem. O resultado expira 24 h depois do envio."
+    ),
+    responses=GET_RESPONSES,
 )
-def get_analysis(analysis_id: str) -> AnalysisOut:
+def get_analysis(
+    analysis_id: str = Path(description="Id devolvido pelo `POST /api/v1/analyses`.", examples=[ANALYSIS_ID]),
+) -> AnalysisOut:
     analysis = result_store.get(analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="analysis not found")

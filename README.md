@@ -1,11 +1,8 @@
 # Nutri-Vision-IA
 
-Serviço que analisa a foto de uma refeição e devolve os alimentos do prato, já identificados na
-**Tabela Brasileira de Composição de Alimentos (TACO)**, com a quantidade estimada em gramas.
+Serviço que analisa a foto de uma refeição e devolve os alimentos do prato, já identificados na **Tabela Brasileira de Composição de Alimentos (TACO)**, com a quantidade estimada em gramas.
 
-Ele faz só isso: recebe a foto, analisa e entrega o resultado. Correções, confirmação da refeição,
-histórico e cálculo de macros ficam na API que consome este serviço. A foto não é guardada: ela
-existe só enquanto está sendo analisada.
+Ele faz só isso: recebe a foto, analisa e entrega o resultado. Correções, confirmação da refeição, histórico e cálculo de macros ficam na API que consome este serviço. A foto não é guardada: ela existe só enquanto está sendo analisada.
 
 ## Funcionalidades
 
