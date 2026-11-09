@@ -187,6 +187,34 @@ app/
 tests/
 ```
 
+## Padrões de projeto
+
+### Singleton
+
+Três recursos são criados uma única vez e compartilhados por todo o serviço:
+
+| onde | o que | como |
+|---|---|---|
+| `app/core/config.py` | `settings` | instância criada no módulo; o Python carrega cada módulo uma só vez |
+| `app/worker/job_queue.py` | `get_redis()` | `@lru_cache(maxsize=1)`: a conexão com o Redis é aberta na primeira chamada e reaproveitada depois |
+| `app/services/taco_table.py` | `_load_table()` | `@lru_cache(maxsize=1)`: o CSV da TACO é lido do disco uma vez e mantido em memória |
+
+Assim as configurações não são lidas de novo a cada uso, as requisições compartilham a mesma
+conexão com o Redis e os 597 alimentos da TACO não são relidos a cada análise.
+
+### Adapter
+
+`_to_detections` (`app/services/food_recognition.py`) converte a resposta do Gemini
+(`_GeminiResponse`) para o formato interno do serviço (`Detection`). No caminho, ela:
+
+- descarta itens com gramas zeradas ou negativas;
+- limita a `confidence` ao intervalo de 0 a 1;
+- troca o nome dado pelo Gemini pelo nome oficial da TACO e, quando o `taco_id` não existe na
+  tabela, mantém o nome do Gemini e deixa o item sem `taco_id`.
+
+O resto do serviço (`analysis_result`, `worker/tasks`) só conhece `Detection`. Por isso, trocar
+o Gemini por outro modelo exige mudar só esse adaptador.
+
 ## Tabela TACO
 
 Os dados vêm da **TACO 4ª edição** (NEPA/UNICAMP, 2011), com 597 alimentos, convertidos a
