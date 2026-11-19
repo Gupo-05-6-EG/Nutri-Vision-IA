@@ -12,9 +12,7 @@ def _is_last_attempt() -> bool:
     return job is None or not job.retries_left
 
 
-def process_analysis(
-    analysis_id: str, image: bytes, mime_type: str, plate_type: Optional[str] = None
-) -> None:
+def process_analysis(analysis_id: str, image: bytes, mime_type: str, plate_type: Optional[str] = None) -> None:
     result_store.update(analysis_id, status=AnalysisStatus.PROCESSING.value)
 
     try:

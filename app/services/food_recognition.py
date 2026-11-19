@@ -114,14 +114,10 @@ PLATE_HINTS = {
 
 
 def build_prompt(plate_type: Optional[str] = None) -> str:
-    return _PROMPT.format(
-        plate_hint=PLATE_HINTS.get(plate_type or "", ""), table=taco_table.format_for_prompt()
-    )
+    return _PROMPT.format(plate_hint=PLATE_HINTS.get(plate_type or "", ""), table=taco_table.format_for_prompt())
 
 
-def recognize_foods(
-    image: bytes, mime_type: str, plate_type: Optional[str] = None
-) -> RecognitionResult:
+def recognize_foods(image: bytes, mime_type: str, plate_type: Optional[str] = None) -> RecognitionResult:
     """Pede a analise ao primeiro modelo disponivel da lista (principal e reservas).
 
     `model_version` registra o modelo que de fato respondeu. Se todos estiverem
@@ -140,9 +136,7 @@ def recognize_foods(
     with _client() as client:
         for position, model in enumerate(models):
             try:
-                response = client.models.generate_content(
-                    model=model, contents=contents, config=config
-                )
+                response = client.models.generate_content(model=model, contents=contents, config=config)
             except Exception as exc:
                 if model_unavailable(exc) and position + 1 < len(models):
                     continue

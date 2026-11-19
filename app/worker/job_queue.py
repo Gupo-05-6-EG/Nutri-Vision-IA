@@ -36,9 +36,7 @@ def get_queue() -> Queue:
     return Queue(QUEUE_NAME, connection=get_redis())
 
 
-def enqueue_analysis(
-    analysis_id: str, image: bytes, mime_type: str, plate_type: Optional[str] = None
-) -> None:
+def enqueue_analysis(analysis_id: str, image: bytes, mime_type: str, plate_type: Optional[str] = None) -> None:
     get_queue().enqueue_call(
         "app.worker.tasks.process_analysis",
         args=(analysis_id, image, mime_type, plate_type),

@@ -1,5 +1,4 @@
 import uuid
-
 from typing import Literal, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Path, UploadFile, status
@@ -21,7 +20,11 @@ def _json_examples(**examples) -> dict:
 
 
 def _error(description: str, detail: str) -> dict:
-    return {"model": ErrorOut, "description": description, "content": {"application/json": {"example": {"detail": detail}}}}
+    return {
+        "model": ErrorOut,
+        "description": description,
+        "content": {"application/json": {"example": {"detail": detail}}},
+    }
 
 
 CREATE_RESPONSES = {
@@ -66,11 +69,23 @@ GET_RESPONSES = {
             },
             bad_photo={
                 "summary": "Foto ruim",
-                "value": {"id": ANALYSIS_ID, "status": "NOT_ESTIMATED", "reason": "bad_photo", "issues": ["blurry"], "items": []},
+                "value": {
+                    "id": ANALYSIS_ID,
+                    "status": "NOT_ESTIMATED",
+                    "reason": "bad_photo",
+                    "issues": ["blurry"],
+                    "items": [],
+                },
             },
             nothing_detected={
                 "summary": "Nenhum alimento na foto",
-                "value": {"id": ANALYSIS_ID, "status": "NOT_ESTIMATED", "reason": "nothing_detected", "model_version": "gemini-3.5-flash-lite", "items": []},
+                "value": {
+                    "id": ANALYSIS_ID,
+                    "status": "NOT_ESTIMATED",
+                    "reason": "nothing_detected",
+                    "model_version": "gemini-3.5-flash-lite",
+                    "items": [],
+                },
             },
             failed={
                 "summary": "O Gemini falhou mesmo depois das novas tentativas",
@@ -121,7 +136,9 @@ def _read_upload(file: UploadFile) -> bytes:
     responses=CREATE_RESPONSES,
 )
 def create_analysis(
-    file: UploadFile = File(description="Foto da refeição: JPEG, PNG, WebP, HEIC ou outro formato que o Pillow abra. Até 10 MB."),
+    file: UploadFile = File(
+        description="Foto da refeição: JPEG, PNG, WebP, HEIC ou outro formato que o Pillow abra. Até 10 MB."
+    ),
     plate_type: Optional[Literal["shallow", "deep"]] = Form(
         default=None,
         description="Tipo de prato informado pelo usuário (raso ou fundo): vira uma dica para estimar as gramas.",
@@ -130,7 +147,7 @@ def create_analysis(
     try:
         image = image_compression.compress_image(_read_upload(file))
     except image_compression.InvalidImageError as exc:
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)) from exc
 
     quality = image_quality.assess_image(image)
     analysis_id = str(uuid.uuid4())
@@ -148,14 +165,12 @@ def create_analysis(
 
     result_store.save({"id": analysis_id, "status": AnalysisStatus.QUEUED.value})
     try:
-        job_queue.enqueue_analysis(
-            analysis_id, image, image_compression.COMPRESSED_MIME_TYPE, plate_type
-        )
+        job_queue.enqueue_analysis(analysis_id, image, image_compression.COMPRESSED_MIME_TYPE, plate_type)
     except RedisError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="analysis queue unavailable, try again",
-        )
+        ) from None
     return AnalysisCreatedOut(id=analysis_id, status=AnalysisStatus.QUEUED)
 
 

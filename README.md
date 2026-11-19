@@ -81,7 +81,11 @@ python -m venv venv
 venv\Scripts\activate             # Linux/macOS: source venv/bin/activate
 pip install -e ".[dev]"
 pytest -q
+ruff check . && ruff format --check .   # lint (pip install ruff==0.8.4)
 ```
+
+O CI (`.github/workflows/ci.yml`) roda o lint, os testes em Python 3.9 e 3.12 e o build da
+imagem Docker em todo PR e em todo push na `main`.
 
 > O worker do RQ não roda nativamente no Windows. Fora do Docker, use WSL.
 
