@@ -43,6 +43,9 @@ def enqueue_analysis(
         "app.worker.tasks.process_analysis",
         args=(analysis_id, image, mime_type, plate_type),
         job_id=analysis_id,
+        # Sem isso o RQ usa a chamada com os argumentos como descricao, e o worker
+        # registra no log o comeco dos bytes da foto (I5).
+        description=f"analysis {analysis_id}",
         timeout=job_timeout_seconds(),
         result_ttl=0,
         failure_ttl=FAILED_JOB_TTL,
