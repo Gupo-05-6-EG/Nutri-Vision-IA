@@ -160,3 +160,23 @@ def test_bad_request_does_not_fall_back(gemini, two_models):
     with pytest.raises(errors.APIError):
         food_recognition.recognize_foods(b"img", "image/jpeg")
     assert [c["model"] for c in fake.calls] == ["principal"]
+
+
+def test_prompt_asks_to_split_mixed_dishes(gemini):
+    fake = gemini(RICE)
+
+    food_recognition.recognize_foods(b"img", "image/jpeg")
+
+    prompt = fake.calls[0]["contents"][1]
+    assert "vinagrete" in prompt
+    assert "EACH visible ingredient" in prompt
+    assert "SHALLOW" not in prompt and "DEEP plate" not in prompt
+
+
+@pytest.mark.parametrize(("plate_type", "hint"), [("shallow", "SHALLOW"), ("deep", "DEEP plate")])
+def test_plate_type_becomes_a_hint(gemini, plate_type, hint):
+    fake = gemini(RICE)
+
+    food_recognition.recognize_foods(b"img", "image/jpeg", plate_type=plate_type)
+
+    assert hint in fake.calls[0]["contents"][1]

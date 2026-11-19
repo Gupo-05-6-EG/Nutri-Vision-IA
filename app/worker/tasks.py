@@ -1,3 +1,5 @@
+from typing import Optional
+
 from rq import get_current_job
 
 from app.services import analysis_result, food_recognition
@@ -10,11 +12,13 @@ def _is_last_attempt() -> bool:
     return job is None or not job.retries_left
 
 
-def process_analysis(analysis_id: str, image: bytes, mime_type: str) -> None:
+def process_analysis(
+    analysis_id: str, image: bytes, mime_type: str, plate_type: Optional[str] = None
+) -> None:
     result_store.update(analysis_id, status=AnalysisStatus.PROCESSING.value)
 
     try:
-        recognition = food_recognition.recognize_foods(image, mime_type)
+        recognition = food_recognition.recognize_foods(image, mime_type, plate_type=plate_type)
     except Exception as exc:
         if food_recognition.is_transient_error(exc) and not _is_last_attempt():
             raise

@@ -123,7 +123,7 @@ Variáveis de ambiente com prefixo `NUTRIVISION_` (ou no arquivo `.env`):
 
 | método | rota | descrição |
 |---|---|---|
-| `POST` | `/api/v1/analyses` | envia a foto (multipart, campo `file`) e devolve o `id` da análise |
+| `POST` | `/api/v1/analyses` | envia a foto (multipart, campo `file`; opcional `plate_type` = `shallow` ou `deep`, o tipo de prato, como dica para as gramas) e devolve o `id` da análise |
 | `GET` | `/api/v1/analyses/{id}` | resultado da análise (404 se não existe ou já expirou) |
 | `GET` | `/health` | status da API e do Redis |
 

@@ -15,8 +15,15 @@ _PROMPT = """You are a nutritionist analyzing a photo of a meal.
 2. For each one, pick the closest item from the Brazilian TACO table below, taking the
    preparation into account (raw, cooked, grilled, fried...). Use ONLY ids from the list.
 3. Estimate the grams of each food. Use a ~26 cm dinner plate, cutlery and glasses in the
-   photo as size references.
+   photo as size references.{plate_hint}
 4. Give your confidence (0 to 1) in each identification.
+
+Mixed preparations (Brazilian vinaigrette "vinagrete", mixed salads, farofa, stews...):
+- if the table has the prepared dish itself, use it;
+- otherwise list EACH visible ingredient as its own item with its own grams (for a
+  vinagrete: tomato, onion, bell pepper...), instead of naming only the main one;
+- keep the preparation right: raw chopped vegetables are raw ("cru"), never a
+  steamed or cooked dish.
 
 If the photo does not show food, answer is_food=false and an empty items list.
 
@@ -94,7 +101,27 @@ def _to_detections(response: _GeminiResponse) -> list:
     return detections
 
 
-def recognize_foods(image: bytes, mime_type: str) -> RecognitionResult:
+PLATE_HINTS = {
+    "shallow": (
+        "\n   The user says the food is on a SHALLOW (flat) plate: the portions are spread out,"
+        "\n   so judge the amount by the area each food covers."
+    ),
+    "deep": (
+        "\n   The user says the food is in a DEEP plate or bowl: part of the food is below the rim,"
+        "\n   so the visible surface underestimates the volume - account for the depth."
+    ),
+}
+
+
+def build_prompt(plate_type: Optional[str] = None) -> str:
+    return _PROMPT.format(
+        plate_hint=PLATE_HINTS.get(plate_type or "", ""), table=taco_table.format_for_prompt()
+    )
+
+
+def recognize_foods(
+    image: bytes, mime_type: str, plate_type: Optional[str] = None
+) -> RecognitionResult:
     """Pede a analise ao primeiro modelo disponivel da lista (principal e reservas).
 
     `model_version` registra o modelo que de fato respondeu. Se todos estiverem
@@ -102,7 +129,7 @@ def recognize_foods(image: bytes, mime_type: str) -> RecognitionResult:
     """
     contents = [
         types.Part.from_bytes(data=image, mime_type=mime_type),
-        _PROMPT.format(table=taco_table.format_for_prompt()),
+        build_prompt(plate_type),
     ]
     config = types.GenerateContentConfig(
         response_mime_type="application/json",

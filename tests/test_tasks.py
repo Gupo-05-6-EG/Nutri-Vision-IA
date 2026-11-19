@@ -19,12 +19,12 @@ def _gemini_returns(monkeypatch, *detections):
     monkeypatch.setattr(
         tasks.food_recognition,
         "recognize_foods",
-        lambda image, mime: RecognitionResult("gemini-test", list(detections)),
+        lambda image, mime, plate_type=None: RecognitionResult("gemini-test", list(detections)),
     )
 
 
 def _gemini_raises(monkeypatch, exc):
-    def _fail(image, mime):
+    def _fail(image, mime, plate_type=None):
         raise exc
 
     monkeypatch.setattr(tasks.food_recognition, "recognize_foods", _fail)

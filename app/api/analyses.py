@@ -1,6 +1,8 @@
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, Path, UploadFile, status
+from typing import Literal, Optional
+
+from fastapi import APIRouter, File, Form, HTTPException, Path, UploadFile, status
 from redis.exceptions import RedisError
 
 from app.core.config import settings
@@ -120,6 +122,10 @@ def _read_upload(file: UploadFile) -> bytes:
 )
 def create_analysis(
     file: UploadFile = File(description="Foto da refeição: JPEG, PNG, WebP, HEIC ou outro formato que o Pillow abra. Até 10 MB."),
+    plate_type: Optional[Literal["shallow", "deep"]] = Form(
+        default=None,
+        description="Tipo de prato informado pelo usuário (raso ou fundo): vira uma dica para estimar as gramas.",
+    ),
 ) -> AnalysisCreatedOut:
     try:
         image = image_compression.compress_image(_read_upload(file))
@@ -142,7 +148,9 @@ def create_analysis(
 
     result_store.save({"id": analysis_id, "status": AnalysisStatus.QUEUED.value})
     try:
-        job_queue.enqueue_analysis(analysis_id, image, image_compression.COMPRESSED_MIME_TYPE)
+        job_queue.enqueue_analysis(
+            analysis_id, image, image_compression.COMPRESSED_MIME_TYPE, plate_type
+        )
     except RedisError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

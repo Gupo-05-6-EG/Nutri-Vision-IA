@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Optional
 
 from redis import Redis
 from rq import Callback, Queue, Retry
@@ -35,10 +36,12 @@ def get_queue() -> Queue:
     return Queue(QUEUE_NAME, connection=get_redis())
 
 
-def enqueue_analysis(analysis_id: str, image: bytes, mime_type: str) -> None:
+def enqueue_analysis(
+    analysis_id: str, image: bytes, mime_type: str, plate_type: Optional[str] = None
+) -> None:
     get_queue().enqueue_call(
         "app.worker.tasks.process_analysis",
-        args=(analysis_id, image, mime_type),
+        args=(analysis_id, image, mime_type, plate_type),
         job_id=analysis_id,
         timeout=job_timeout_seconds(),
         result_ttl=0,
