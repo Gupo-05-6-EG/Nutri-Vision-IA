@@ -92,7 +92,8 @@ Variáveis de ambiente com prefixo `NUTRIVISION_` (ou no arquivo `.env`):
 | variável | padrão | descrição |
 |---|---|---|
 | `GEMINI_API_KEY` | - | chave da API do Gemini (obrigatória no worker) |
-| `GEMINI_MODEL` | `gemini-3.8-flash` | modelo usado na análise |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | modelo principal da análise |
+| `GEMINI_FALLBACK_MODELS` | `gemini-3.5-flash` | reservas, separadas por vírgula, tentadas na hora quando o principal responde 404, 429 ou 5xx |
 | `GEMINI_TIMEOUT_MS` | `90000` | timeout de cada chamada ao Gemini (o retry fica com a fila) |
 | `REDIS_URL` | `redis://localhost:6379/0` | fila e resultados |
 | `RESULT_TTL_SECONDS` | `86400` | por quanto tempo o resultado fica disponível (24 h) |
@@ -129,7 +130,7 @@ curl http://localhost:8000/api/v1/analyses/6f1c...
 {
   "id": "6f1c...",
   "status": "DONE",
-  "model_version": "gemini-3.8-flash",
+  "model_version": "gemini-3.5-flash-lite",
   "items": [
     { "food": "Arroz, tipo 1, cozido", "taco_id": 3, "grams": 160.0, "confidence": 0.95 },
     { "food": "Feijão, preto, cozido", "taco_id": 567, "grams": 110.0, "confidence": 0.95 }

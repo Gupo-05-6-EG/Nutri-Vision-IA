@@ -50,7 +50,7 @@ GET_RESPONSES = {
                 "value": {
                     "id": ANALYSIS_ID,
                     "status": "DONE",
-                    "model_version": "gemini-3.5-flash",
+                    "model_version": "gemini-3.5-flash-lite",
                     "items": [
                         {"food": "Arroz, tipo 1, cozido", "taco_id": 3, "grams": 160.0, "confidence": 0.95},
                         {"food": "Feijão, preto, cozido", "taco_id": 567, "grams": 110.0, "confidence": 0.95},
@@ -68,7 +68,7 @@ GET_RESPONSES = {
             },
             nothing_detected={
                 "summary": "Nenhum alimento na foto",
-                "value": {"id": ANALYSIS_ID, "status": "NOT_ESTIMATED", "reason": "nothing_detected", "model_version": "gemini-3.5-flash", "items": []},
+                "value": {"id": ANALYSIS_ID, "status": "NOT_ESTIMATED", "reason": "nothing_detected", "model_version": "gemini-3.5-flash-lite", "items": []},
             },
             failed={
                 "summary": "O Gemini falhou mesmo depois das novas tentativas",

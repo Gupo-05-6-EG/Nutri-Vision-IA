@@ -57,6 +57,14 @@ def is_transient_error(exc: Exception) -> bool:
     return isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
 
 
+def model_unavailable(exc: Exception) -> bool:
+    """Erro em que vale tentar o proximo modelo da lista: sobrecarga, fora do ar ou
+    modelo que nao existe (ou nao esta liberado) para esta chave."""
+    if isinstance(exc, errors.APIError):
+        return exc.code in (404, 429) or exc.code >= 500
+    return False
+
+
 def _client() -> genai.Client:
     if not settings.gemini_api_key:
         raise RuntimeError("NUTRIVISION_GEMINI_API_KEY is not set")
@@ -87,20 +95,33 @@ def _to_detections(response: _GeminiResponse) -> list:
 
 
 def recognize_foods(image: bytes, mime_type: str) -> RecognitionResult:
-    with _client() as client:
-        response = client.models.generate_content(
-            model=settings.gemini_model,
-            contents=[
-                types.Part.from_bytes(data=image, mime_type=mime_type),
-                _PROMPT.format(table=taco_table.format_for_prompt()),
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=_GeminiResponse,
-                temperature=0.2,
-            ),
-        )
-    return RecognitionResult(
-        model_version=settings.gemini_model,
-        detections=_to_detections(_GeminiResponse.model_validate_json(response.text)),
+    """Pede a analise ao primeiro modelo disponivel da lista (principal e reservas).
+
+    `model_version` registra o modelo que de fato respondeu. Se todos estiverem
+    indisponiveis, o erro do ultimo sobe para a fila decidir se tenta de novo.
+    """
+    contents = [
+        types.Part.from_bytes(data=image, mime_type=mime_type),
+        _PROMPT.format(table=taco_table.format_for_prompt()),
+    ]
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=_GeminiResponse,
+        temperature=0.2,
     )
+    models = settings.gemini_models
+    with _client() as client:
+        for position, model in enumerate(models):
+            try:
+                response = client.models.generate_content(
+                    model=model, contents=contents, config=config
+                )
+            except Exception as exc:
+                if model_unavailable(exc) and position + 1 < len(models):
+                    continue
+                raise
+            return RecognitionResult(
+                model_version=model,
+                detections=_to_detections(_GeminiResponse.model_validate_json(response.text)),
+            )
+    raise RuntimeError("no Gemini model configured")

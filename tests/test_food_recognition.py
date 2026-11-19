@@ -9,10 +9,11 @@ from app.services import food_recognition
 
 
 class _FakeClient:
-    def __init__(self, response: dict):
+    def __init__(self, response: dict, failures: dict = None):
         self.calls = []
         self.models = SimpleNamespace(generate_content=self._generate)
         self._text = json.dumps(response)
+        self._failures = failures or {}
         self.closed = False
 
     def __enter__(self):
@@ -23,13 +24,15 @@ class _FakeClient:
 
     def _generate(self, **kwargs):
         self.calls.append(kwargs)
+        if kwargs["model"] in self._failures:
+            raise self._failures[kwargs["model"]]
         return SimpleNamespace(text=self._text)
 
 
 @pytest.fixture
 def gemini(monkeypatch):
-    def _install(response: dict) -> _FakeClient:
-        fake = _FakeClient(response)
+    def _install(response: dict, failures: dict = None) -> _FakeClient:
+        fake = _FakeClient(response, failures)
         monkeypatch.setattr(food_recognition, "_client", lambda: fake)
         return fake
 
@@ -102,3 +105,58 @@ def test_not_food_returns_empty(gemini):
 )
 def test_is_transient_error(exc, transient):
     assert food_recognition.is_transient_error(exc) is transient
+
+
+RICE = {"is_food": True, "items": [{"taco_id": 3, "name": "rice", "grams": 150, "confidence": 0.9}]}
+UNAVAILABLE = errors.APIError(503, {"error": {"status": "UNAVAILABLE"}})
+
+
+@pytest.fixture
+def two_models(monkeypatch):
+    monkeypatch.setattr(food_recognition.settings, "gemini_model", "principal")
+    monkeypatch.setattr(food_recognition.settings, "gemini_fallback_models", "reserva, principal")
+
+
+def test_default_model_is_flash_lite():
+    from app.core.config import Settings
+
+    assert Settings(_env_file=None).gemini_model == "gemini-3.5-flash-lite"
+
+
+def test_model_chain_has_no_duplicates(two_models):
+    assert food_recognition.settings.gemini_models == ["principal", "reserva"]
+
+
+def test_uses_the_main_model_when_it_answers(gemini, two_models):
+    fake = gemini(RICE)
+
+    result = food_recognition.recognize_foods(b"img", "image/jpeg")
+
+    assert result.model_version == "principal"
+    assert [c["model"] for c in fake.calls] == ["principal"]
+
+
+@pytest.mark.parametrize("code", [404, 429, 503, 504])
+def test_falls_back_when_the_main_model_is_unavailable(gemini, two_models, code):
+    fake = gemini(RICE, failures={"principal": errors.APIError(code, {"error": {}})})
+
+    result = food_recognition.recognize_foods(b"img", "image/jpeg")
+
+    assert result.model_version == "reserva"
+    assert [c["model"] for c in fake.calls] == ["principal", "reserva"]
+    assert result.detections[0].taco_id == 3
+
+
+def test_raises_when_every_model_is_unavailable(gemini, two_models):
+    gemini(RICE, failures={"principal": UNAVAILABLE, "reserva": UNAVAILABLE})
+
+    with pytest.raises(errors.APIError):
+        food_recognition.recognize_foods(b"img", "image/jpeg")
+
+
+def test_bad_request_does_not_fall_back(gemini, two_models):
+    fake = gemini(RICE, failures={"principal": errors.APIError(400, {"error": {}})})
+
+    with pytest.raises(errors.APIError):
+        food_recognition.recognize_foods(b"img", "image/jpeg")
+    assert [c["model"] for c in fake.calls] == ["principal"]
