@@ -85,6 +85,19 @@ pytest -q
 
 > O worker do RQ não roda nativamente no Windows. Fora do Docker, use WSL.
 
+## Tempos de espera
+
+A fila faz **uma** nova tentativa, 10 s depois, quando o Gemini falha com erro passageiro
+(429, 5xx, timeout). Em cada tentativa, o modelo principal e as reservas são tentados em sequência.
+No pior caso, do envio ao `FAILED`:
+
+```
+2 tentativas x (40 s de timeout x 2 modelos) + 10 s = 170 s
+```
+
+Quem consulta a análise (o app, pelo back-end) deve esperar pelo menos esse tempo, ou 3 min,
+antes de desistir, e continuar consultando o **mesmo id** em vez de reenviar a foto.
+
 ## Configuração
 
 Variáveis de ambiente com prefixo `NUTRIVISION_` (ou no arquivo `.env`):
@@ -94,7 +107,7 @@ Variáveis de ambiente com prefixo `NUTRIVISION_` (ou no arquivo `.env`):
 | `GEMINI_API_KEY` | - | chave da API do Gemini (obrigatória no worker) |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | modelo principal da análise |
 | `GEMINI_FALLBACK_MODELS` | `gemini-3.5-flash` | reservas, separadas por vírgula, tentadas na hora quando o principal responde 404, 429 ou 5xx |
-| `GEMINI_TIMEOUT_MS` | `90000` | timeout de cada chamada ao Gemini (o retry fica com a fila) |
+| `GEMINI_TIMEOUT_MS` | `40000` | timeout de cada chamada ao Gemini (o retry fica com a fila) |
 | `REDIS_URL` | `redis://localhost:6379/0` | fila e resultados |
 | `RESULT_TTL_SECONDS` | `86400` | por quanto tempo o resultado fica disponível (24 h) |
 | `TACO_CSV` | `app/data/taco.csv` | arquivo da tabela TACO |

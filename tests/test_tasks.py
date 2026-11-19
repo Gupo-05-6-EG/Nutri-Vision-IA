@@ -107,3 +107,11 @@ def test_job_crash_marks_failed_only_after_last_retry():
     analysis = result_store.get(ANALYSIS_ID)
     assert analysis["status"] == "FAILED"
     assert "httpx" in analysis["error"]
+
+
+def test_worst_case_fits_in_the_app_wait():
+    """O app espera 3 min pela analise: a fila tem que desistir antes disso (I2)."""
+    from app.worker import job_queue
+
+    assert job_queue.worst_case_seconds() <= 180
+    assert job_queue.job_timeout_seconds() >= 40 * 2

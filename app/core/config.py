@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     # Modelos de reserva, separados por virgula, tentados na mesma tentativa quando o
     # principal esta indisponivel (429, 5xx ou modelo inexistente para a conta).
     gemini_fallback_models: str = "gemini-3.5-flash"
-    gemini_timeout_ms: int = 90_000
+    # Timeout de cada chamada. Com a fila (1 nova tentativa) e 2 modelos, o pior caso
+    # fica em ~170 s: abaixo dos 3 min que o app espera (ver worker/job_queue.py).
+    gemini_timeout_ms: int = 40_000
     taco_csv: Path = APP_DIR / "data" / "taco.csv"
 
     min_sharpness: float = 60.0
