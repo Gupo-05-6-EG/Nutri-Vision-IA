@@ -20,9 +20,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        # 3.12 e a versao da imagem Docker; 3.9 e o minimo declarado no pyproject.
-        python-version: ["3.9", "3.12"]
+        # 3.12 e a versao da imagem Docker; 3.10 e a mais antiga que o runner
+        # do GitHub ainda oferece (o 3.9 saiu do Ubuntu 26.04).
+        python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
