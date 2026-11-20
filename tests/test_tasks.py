@@ -19,12 +19,12 @@ def _gemini_returns(monkeypatch, *detections):
     monkeypatch.setattr(
         tasks.food_recognition,
         "recognize_foods",
-        lambda image, mime: RecognitionResult("gemini-test", list(detections)),
+        lambda image, mime, plate_type=None: RecognitionResult("gemini-test", list(detections)),
     )
 
 
 def _gemini_raises(monkeypatch, exc):
-    def _fail(image, mime):
+    def _fail(image, mime, plate_type=None):
         raise exc
 
     monkeypatch.setattr(tasks.food_recognition, "recognize_foods", _fail)
@@ -107,3 +107,28 @@ def test_job_crash_marks_failed_only_after_last_retry():
     analysis = result_store.get(ANALYSIS_ID)
     assert analysis["status"] == "FAILED"
     assert "httpx" in analysis["error"]
+
+
+def test_worst_case_fits_in_the_app_wait():
+    """O app espera 3 min pela analise: a fila tem que desistir antes disso (I2)."""
+    from app.worker import job_queue
+
+    assert job_queue.worst_case_seconds() <= 180
+    assert job_queue.job_timeout_seconds() >= 40 * 2
+
+
+def test_job_description_does_not_carry_the_photo(fake_redis, monkeypatch):
+    """O worker loga a descricao do job: ela nao pode trazer os bytes da foto (I5)."""
+    from rq import Queue
+
+    from app.worker import job_queue
+
+    queue = Queue(job_queue.QUEUE_NAME, connection=fake_redis)  # assincrona: so enfileira
+    monkeypatch.setattr(job_queue, "get_queue", lambda: queue)
+
+    job_queue.enqueue_analysis("abc", bytes([0xFF, 0xD8, 0xFF]) + b"SEGREDO-DA-FOTO", "image/jpeg")
+
+    [job] = queue.jobs
+    assert job.description == "analysis abc"
+    assert "SEGREDO" not in job.description
+    assert "xff" not in job.description

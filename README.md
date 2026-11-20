@@ -81,9 +81,26 @@ python -m venv venv
 venv\Scripts\activate             # Linux/macOS: source venv/bin/activate
 pip install -e ".[dev]"
 pytest -q
+ruff check . && ruff format --check .   # lint (pip install ruff==0.8.4)
 ```
 
+O CI (`.github/workflows/ci.yml`) roda o lint, os testes em Python 3.10 e 3.12 e o build da
+imagem Docker em todo PR e em todo push na `main`.
+
 > O worker do RQ não roda nativamente no Windows. Fora do Docker, use WSL.
+
+## Tempos de espera
+
+A fila faz **uma** nova tentativa, 10 s depois, quando o Gemini falha com erro passageiro
+(429, 5xx, timeout). Em cada tentativa, o modelo principal e as reservas são tentados em sequência.
+No pior caso, do envio ao `FAILED`:
+
+```
+2 tentativas x (40 s de timeout x 2 modelos) + 10 s = 170 s
+```
+
+Quem consulta a análise (o app, pelo back-end) deve esperar pelo menos esse tempo, ou 3 min,
+antes de desistir, e continuar consultando o **mesmo id** em vez de reenviar a foto.
 
 ## Configuração
 
@@ -92,8 +109,9 @@ Variáveis de ambiente com prefixo `NUTRIVISION_` (ou no arquivo `.env`):
 | variável | padrão | descrição |
 |---|---|---|
 | `GEMINI_API_KEY` | - | chave da API do Gemini (obrigatória no worker) |
-| `GEMINI_MODEL` | `gemini-3.8-flash` | modelo usado na análise |
-| `GEMINI_TIMEOUT_MS` | `90000` | timeout de cada chamada ao Gemini (o retry fica com a fila) |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | modelo principal da análise |
+| `GEMINI_FALLBACK_MODELS` | `gemini-3.5-flash` | reservas, separadas por vírgula, tentadas na hora quando o principal responde 404, 429 ou 5xx |
+| `GEMINI_TIMEOUT_MS` | `40000` | timeout de cada chamada ao Gemini (o retry fica com a fila) |
 | `REDIS_URL` | `redis://localhost:6379/0` | fila e resultados |
 | `RESULT_TTL_SECONDS` | `86400` | por quanto tempo o resultado fica disponível (24 h) |
 | `TACO_CSV` | `app/data/taco.csv` | arquivo da tabela TACO |
@@ -109,7 +127,7 @@ Variáveis de ambiente com prefixo `NUTRIVISION_` (ou no arquivo `.env`):
 
 | método | rota | descrição |
 |---|---|---|
-| `POST` | `/api/v1/analyses` | envia a foto (multipart, campo `file`) e devolve o `id` da análise |
+| `POST` | `/api/v1/analyses` | envia a foto (multipart, campo `file`; opcional `plate_type` = `shallow` ou `deep`, o tipo de prato, como dica para as gramas) e devolve o `id` da análise |
 | `GET` | `/api/v1/analyses/{id}` | resultado da análise (404 se não existe ou já expirou) |
 | `GET` | `/health` | status da API e do Redis |
 
@@ -129,7 +147,7 @@ curl http://localhost:8000/api/v1/analyses/6f1c...
 {
   "id": "6f1c...",
   "status": "DONE",
-  "model_version": "gemini-3.8-flash",
+  "model_version": "gemini-3.5-flash-lite",
   "items": [
     { "food": "Arroz, tipo 1, cozido", "taco_id": 3, "grams": 160.0, "confidence": 0.95 },
     { "food": "Feijão, preto, cozido", "taco_id": 567, "grams": 110.0, "confidence": 0.95 }

@@ -15,14 +15,27 @@ class Settings(BaseSettings):
     jpeg_quality: int = 85
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.8-flash"
-    gemini_timeout_ms: int = 90_000
+    # gemini-3.5-flash-lite respondeu 10 de 10 analises em 2-5 s na revisao de 18/11;
+    # o gemini-3.8-flash deu 503 ("high demand") em todas as tentativas.
+    gemini_model: str = "gemini-3.5-flash-lite"
+    # Modelos de reserva, separados por virgula, tentados na mesma tentativa quando o
+    # principal esta indisponivel (429, 5xx ou modelo inexistente para a conta).
+    gemini_fallback_models: str = "gemini-3.5-flash"
+    # Timeout de cada chamada. Com a fila (1 nova tentativa) e 2 modelos, o pior caso
+    # fica em ~170 s: abaixo dos 3 min que o app espera (ver worker/job_queue.py).
+    gemini_timeout_ms: int = 40_000
     taco_csv: Path = APP_DIR / "data" / "taco.csv"
 
     min_sharpness: float = 60.0
     min_brightness: float = 45.0
     max_brightness: float = 220.0
     min_confidence: float = 0.50
+
+    @property
+    def gemini_models(self) -> list:
+        """Modelo principal seguido das reservas, sem repetir."""
+        chain = [self.gemini_model] + [m.strip() for m in self.gemini_fallback_models.split(",")]
+        return list(dict.fromkeys(m for m in chain if m))
 
 
 settings = Settings()

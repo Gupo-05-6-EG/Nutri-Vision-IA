@@ -13,9 +13,7 @@ def _key(analysis_id: str) -> str:
 
 
 def save(analysis: dict) -> None:
-    job_queue.get_redis().set(
-        _key(analysis["id"]), json.dumps(analysis), ex=settings.result_ttl_seconds
-    )
+    job_queue.get_redis().set(_key(analysis["id"]), json.dumps(analysis), ex=settings.result_ttl_seconds)
 
 
 def get(analysis_id: str) -> Optional[dict]:

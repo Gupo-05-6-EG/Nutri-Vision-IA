@@ -1,7 +1,7 @@
 from io import BytesIO
 
-from PIL import Image, ImageOps, UnidentifiedImageError
 from pi_heif import register_heif_opener
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.core.config import settings
 

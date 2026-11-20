@@ -15,8 +15,15 @@ _PROMPT = """You are a nutritionist analyzing a photo of a meal.
 2. For each one, pick the closest item from the Brazilian TACO table below, taking the
    preparation into account (raw, cooked, grilled, fried...). Use ONLY ids from the list.
 3. Estimate the grams of each food. Use a ~26 cm dinner plate, cutlery and glasses in the
-   photo as size references.
+   photo as size references.{plate_hint}
 4. Give your confidence (0 to 1) in each identification.
+
+Mixed preparations (Brazilian vinaigrette "vinagrete", mixed salads, farofa, stews...):
+- if the table has the prepared dish itself, use it;
+- otherwise list EACH visible ingredient as its own item with its own grams (for a
+  vinagrete: tomato, onion, bell pepper...), instead of naming only the main one;
+- keep the preparation right: raw chopped vegetables are raw ("cru"), never a
+  steamed or cooked dish.
 
 If the photo does not show food, answer is_food=false and an empty items list.
 
@@ -57,6 +64,14 @@ def is_transient_error(exc: Exception) -> bool:
     return isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
 
 
+def model_unavailable(exc: Exception) -> bool:
+    """Erro em que vale tentar o proximo modelo da lista: sobrecarga, fora do ar ou
+    modelo que nao existe (ou nao esta liberado) para esta chave."""
+    if isinstance(exc, errors.APIError):
+        return exc.code in (404, 429) or exc.code >= 500
+    return False
+
+
 def _client() -> genai.Client:
     if not settings.gemini_api_key:
         raise RuntimeError("NUTRIVISION_GEMINI_API_KEY is not set")
@@ -86,21 +101,48 @@ def _to_detections(response: _GeminiResponse) -> list:
     return detections
 
 
-def recognize_foods(image: bytes, mime_type: str) -> RecognitionResult:
-    with _client() as client:
-        response = client.models.generate_content(
-            model=settings.gemini_model,
-            contents=[
-                types.Part.from_bytes(data=image, mime_type=mime_type),
-                _PROMPT.format(table=taco_table.format_for_prompt()),
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=_GeminiResponse,
-                temperature=0.2,
-            ),
-        )
-    return RecognitionResult(
-        model_version=settings.gemini_model,
-        detections=_to_detections(_GeminiResponse.model_validate_json(response.text)),
+PLATE_HINTS = {
+    "shallow": (
+        "\n   The user says the food is on a SHALLOW (flat) plate: the portions are spread out,"
+        "\n   so judge the amount by the area each food covers."
+    ),
+    "deep": (
+        "\n   The user says the food is in a DEEP plate or bowl: part of the food is below the rim,"
+        "\n   so the visible surface underestimates the volume - account for the depth."
+    ),
+}
+
+
+def build_prompt(plate_type: Optional[str] = None) -> str:
+    return _PROMPT.format(plate_hint=PLATE_HINTS.get(plate_type or "", ""), table=taco_table.format_for_prompt())
+
+
+def recognize_foods(image: bytes, mime_type: str, plate_type: Optional[str] = None) -> RecognitionResult:
+    """Pede a analise ao primeiro modelo disponivel da lista (principal e reservas).
+
+    `model_version` registra o modelo que de fato respondeu. Se todos estiverem
+    indisponiveis, o erro do ultimo sobe para a fila decidir se tenta de novo.
+    """
+    contents = [
+        types.Part.from_bytes(data=image, mime_type=mime_type),
+        build_prompt(plate_type),
+    ]
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=_GeminiResponse,
+        temperature=0.2,
     )
+    models = settings.gemini_models
+    with _client() as client:
+        for position, model in enumerate(models):
+            try:
+                response = client.models.generate_content(model=model, contents=contents, config=config)
+            except Exception as exc:
+                if model_unavailable(exc) and position + 1 < len(models):
+                    continue
+                raise
+            return RecognitionResult(
+                model_version=model,
+                detections=_to_detections(_GeminiResponse.model_validate_json(response.text)),
+            )
+    raise RuntimeError("no Gemini model configured")

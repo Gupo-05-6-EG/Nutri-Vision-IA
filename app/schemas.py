@@ -7,7 +7,9 @@ from app.services.analysis_result import AnalysisStatus
 
 class ItemOut(BaseModel):
     food: str = Field(
-        description="Nome do alimento como está na Tabela TACO (ou o nome dado pelo Gemini, quando não está na tabela).",
+        description=(
+            "Nome do alimento como está na Tabela TACO (ou o nome dado pelo Gemini, quando não está na tabela)."
+        ),
         examples=["Arroz, tipo 1, cozido"],
     )
     taco_id: Optional[int] = Field(
@@ -41,7 +43,9 @@ class AnalysisCreatedOut(BaseModel):
     )
     issues: Optional[list[str]] = Field(
         default=None,
-        description="Só quando `reason` é `bad_photo`: `blurry` (borrada), `too_dark` (escura) e/ou `too_bright` (estourada).",
+        description=(
+            "Só quando `reason` é `bad_photo`: `blurry` (borrada), `too_dark` (escura) e/ou `too_bright` (estourada)."
+        ),
         examples=[["blurry"]],
     )
 

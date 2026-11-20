@@ -14,8 +14,8 @@ from app.worker import job_queue, tasks
 def gemini_calls(monkeypatch):
     calls = []
 
-    def _recognize(image, mime):
-        calls.append((image, mime))
+    def _recognize(image, mime, plate_type=None):
+        calls.append((image, mime, plate_type))
         return RecognitionResult(
             "gemini-test",
             [
@@ -79,7 +79,7 @@ def test_upload_is_compressed_before_queueing(client, gemini_calls, sharp_photo)
 
     assert _upload(client, large.getvalue()).status_code == 202
 
-    [(image, mime)] = gemini_calls
+    [(image, mime, _plate)] = gemini_calls
     sent = Image.open(BytesIO(image))
     assert (mime, sent.format, max(sent.size)) == ("image/jpeg", "JPEG", 1280)
     assert len(image) < len(large.getvalue())
@@ -105,3 +105,25 @@ def test_removed_routes_are_gone(client):
 
 def test_health_with_redis(client):
     assert client.get("/health").json() == {"status": "ok", "redis": "ok"}
+
+
+def test_plate_type_reaches_the_recognition(client, gemini_calls, sharp_photo):
+    created = client.post(
+        "/api/v1/analyses",
+        files={"file": ("meal.png", sharp_photo, "image/png")},
+        data={"plate_type": "deep"},
+    )
+
+    assert created.status_code == 202, created.text
+    assert gemini_calls[-1][2] == "deep"
+
+
+def test_invalid_plate_type_is_rejected(client, gemini_calls, sharp_photo):
+    created = client.post(
+        "/api/v1/analyses",
+        files={"file": ("meal.png", sharp_photo, "image/png")},
+        data={"plate_type": "tray"},
+    )
+
+    assert created.status_code == 422
+    assert gemini_calls == []

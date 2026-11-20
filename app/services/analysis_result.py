@@ -9,7 +9,6 @@ REASON_LOW_CONFIDENCE = "low_confidence"
 
 
 class AnalysisStatus(str, enum.Enum):
-
     QUEUED = "QUEUED"
     PROCESSING = "PROCESSING"
     DONE = "DONE"
