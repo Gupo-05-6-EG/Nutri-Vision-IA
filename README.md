@@ -207,31 +207,76 @@ tests/
 
 ## Padrões de projeto
 
+O serviço usa dois padrões: **Singleton**, para os recursos caros que devem existir uma vez só,
+e **Adapter**, para isolar o Gemini do resto do código.
+
 ### Singleton
 
-Três recursos são criados uma única vez e compartilhados por todo o serviço:
+**Onde:** três recursos são criados uma única vez e compartilhados por todo o serviço.
 
-| onde | o que | como |
+| arquivo | o que | como |
 |---|---|---|
 | `app/core/config.py` | `settings` | instância criada no módulo; o Python carrega cada módulo uma só vez |
-| `app/worker/job_queue.py` | `get_redis()` | `@lru_cache(maxsize=1)`: a conexão com o Redis é aberta na primeira chamada e reaproveitada depois |
-| `app/services/taco_table.py` | `_load_table()` | `@lru_cache(maxsize=1)`: o CSV da TACO é lido do disco uma vez e mantido em memória |
+| `app/worker/job_queue.py` | `get_redis()` | `@lru_cache(maxsize=1)`: a conexão é aberta na primeira chamada e reaproveitada depois |
+| `app/services/taco_table.py` | `_load_table()` | `@lru_cache(maxsize=1)`: o CSV da TACO é lido do disco uma vez e fica em memória |
 
-Assim as configurações não são lidas de novo a cada uso, as requisições compartilham a mesma
-conexão com o Redis e os 597 alimentos da TACO não são relidos a cada análise.
+**Código:**
+
+```python
+# app/core/config.py
+settings = Settings()  # uma instância para o serviço inteiro
+
+# app/worker/job_queue.py
+@lru_cache(maxsize=1)
+def get_redis() -> Redis:
+    return Redis.from_url(settings.redis_url)
+
+# app/services/taco_table.py
+@lru_cache(maxsize=1)
+def _load_table() -> dict:
+    with open(settings.taco_csv, encoding="utf-8-sig", newline="") as file:
+        rows = list(csv.DictReader(file, delimiter=";"))
+    ...  # monta {id: TacoFood} com os 597 alimentos
+```
+
+**Por que:** os três são caros de criar e não mudam enquanto o serviço roda. Ler o `.env`,
+abrir uma conexão com o Redis ou carregar os 597 alimentos da TACO a cada requisição ou a cada
+análise seria trabalho repetido, e várias conexões abertas desperdiçariam recursos do Redis.
+Com uma instância só, as configurações são lidas uma vez, todas as requisições compartilham a
+mesma conexão e cada análise consulta a tabela já em memória. No Python, o módulo e o
+`lru_cache` já garantem a instância única sem precisar de uma classe Singleton própria.
 
 ### Adapter
 
-`_to_detections` (`app/services/food_recognition.py`) converte a resposta do Gemini
-(`_GeminiResponse`) para o formato interno do serviço (`Detection`). No caminho, ela:
+**Onde:** `_to_detections`, em `app/services/food_recognition.py`, converte a resposta do
+Gemini (`_GeminiResponse`) para o formato interno do serviço (`Detection`).
 
-- descarta itens com gramas zeradas ou negativas;
-- limita a `confidence` ao intervalo de 0 a 1;
-- troca o nome dado pelo Gemini pelo nome oficial da TACO e, quando o `taco_id` não existe na
-  tabela, mantém o nome do Gemini e deixa o item sem `taco_id`.
+**Código:**
 
-O resto do serviço (`analysis_result`, `worker/tasks`) só conhece `Detection`. Por isso, trocar
-o Gemini por outro modelo exige mudar só esse adaptador.
+```python
+# app/services/food_recognition.py
+def _to_detections(response: _GeminiResponse) -> list:
+    if not response.is_food:
+        return []
+
+    detections = []
+    for item in response.items:
+        if item.grams <= 0:
+            continue                                        # descarta porção inválida
+        confidence = min(max(item.confidence, 0.0), 1.0)    # limita a 0..1
+        food = taco_table.get_food(item.taco_id)
+        if food is None:                                    # id fora da TACO: mantém o nome do Gemini
+            detections.append(Detection(item.name, None, item.grams, confidence))
+        else:                                               # usa o nome oficial da TACO
+            detections.append(Detection(food.name, food.id, item.grams, confidence))
+    return detections
+```
+
+**Por que:** a resposta do Gemini tem o formato dele e pode vir com problemas (gramas zeradas,
+confiança fora de 0 a 1, nome diferente do oficial ou `taco_id` inexistente). O resto do serviço
+(`analysis_result`, `worker/tasks` e a API) só conhece `Detection`. Assim, toda a conversão e a
+limpeza ficam num lugar só, e trocar o Gemini por outro modelo de visão exige mudar só esse
+adaptador, sem mexer em quem usa o resultado.
 
 ## Tabela TACO
 
